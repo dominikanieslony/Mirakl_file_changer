@@ -7,26 +7,37 @@ wartosc nie jest w slowniku, pole jest oznaczane do recznej kontroli zamiast
 byc "poprawianym" na sile.
 """
 
-# --- genders: tylko niemieckie tokeny sa docelowo poprawne ---------------------
-GENDERS_EN_TO_DE = {
-    "male": "männlich",
-    "female": "weiblich",
-    "unisex": "unisex",
-    "boy": "Jungen",
-    "girl": "Mädchen",
-    "kids": "Kinder",
-}
-GENDERS_VALID_DE = {"männlich", "weiblich", "unisex", "Jungen", "Mädchen", "Kinder"}
+# --- genders: POTWIERDZONE przez uzytkownika na podstawie definicji atrybutu w
+# systemie (code/label sa tu identyczne, angielskie): female / male / unisex.
+# Wszystko inne (np. niemieckie "männlich"/"weiblich") to bledna wartosc pola.
+GENDERS_VALID_CODES = {"female", "male", "unisex"}
 
-# --- ages: tylko niemieckie tokeny sa docelowo poprawne -------------------------
-AGES_EN_TO_DE = {
-    "adult": "Erwachsene",
-    "child": "Kinder",
-    "children": "Kinder",
-    "baby": "Babys",
-    "toddler": "Kleinkinder",
+GENDERS_LABEL_TO_CODE = {
+    # zaobserwowane niemieckie warianty (np. w ReferenceData z good_data_2.xlsx)
+    "männlich": "male",
+    "weiblich": "female",
+    "unisex": "unisex",
 }
-AGES_VALID_DE = {"Erwachsene", "Kinder", "Babys", "Kleinkinder"}
+
+# --- ages: POTWIERDZONE przez uzytkownika na podstawie definicji atrybutu w
+# systemie (code/label). Prawidlowa wartosc w pliku importu to CODE (angielski,
+# liczba pojedyncza): baby / child / adult. Wszystko inne (w tym niemieckie
+# "Erwachsene"/"Kinder" i angielskie labelki w liczbie mnogiej "adults"/
+# "children"/"babies") to LABEL do wyswietlania, nie poprawna wartosc pola.
+AGES_VALID_CODES = {"baby", "child", "adult"}
+
+AGES_LABEL_TO_CODE = {
+    # angielskie labelki (liczba mnoga) z definicji atrybutu
+    "adults": "adult",
+    "children": "child",
+    "babies": "baby",
+    # zaobserwowane niemieckie warianty (np. w ood_data_2.xlsx) - traktowane
+    # jako bledne/label zamiast code
+    "erwachsene": "adult",
+    "kinder": "child",
+    "kleinkinder": "child",  # brak osobnego kodu "toddler" w systemie - najblizszy odpowiednik
+    "babys": "baby",
+}
 
 # --- kolory: zaobserwowane angielskie/bledne formy -> poprawna niemiecka forma --
 COLORS_EN_TO_DE = {
@@ -39,6 +50,31 @@ COLORS_EN_TO_DE = {
     "beige": "Beige",
     "rose": "Rosa",
     "anthracite": "Anthrazit",
+}
+
+# --- colors (Limango Color): POTWIERDZONE przez uzytkownika - pelna lista code
+# (identyczna z label, angielska, lowercase, l. pojedyncza z myslnikami dla
+# zlozen). To jest ZAMKNIETY slownik dopuszczalnych wartosci tego pola.
+COLORS_VALID_CODES = {
+    "anthracite", "beige", "black", "blue", "bordeaux", "bronze", "brown",
+    "colorful", "cream", "cyan", "dark-blue", "gold", "gray", "green", "khaki",
+    "light-blue", "light-brown", "light-green", "lilac", "multicolored",
+    "nocolor", "olive", "orange", "others", "petrol", "pink", "purple", "red",
+    "rose", "sand", "silver", "taupe", "transparent", "turquoise", "uncolored",
+    "white", "yellow",
+}
+
+# najczesciej spotykane warianty pisowni/synonimy -> poprawny code
+COLORS_LABEL_TO_CODE = {
+    "grey": "gray",
+    "darkblue": "dark-blue",
+    "lightblue": "light-blue",
+    "lightbrown": "light-brown",
+    "lightgreen": "light-green",
+    "multicolor": "multicolored",
+    "multi-colored": "multicolored",
+    "no color": "nocolor",
+    "no-color": "nocolor",
 }
 
 # Naprawa uciecia niemieckich znakow specjalnych (obserwowane w tytulach pliku 1:

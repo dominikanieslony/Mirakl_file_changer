@@ -1,6 +1,15 @@
 """
 Silnik regul poprawiajacych dane produktowe.
 
+WAZNE: automatyczne tlumaczenie angielskich slow na niemieckie odbywa sie w:
+  - tytule (wszystkie skladowe OPROCZ dokladnego fragmentu bedacego nazwa
+    modelu - modelName_text - ktory nigdy nie jest tlumaczony/modyfikowany),
+  - Long Description (LongDescription_de/Langbeschreibung),
+  - materialComposition_de/Materialzusammensetzung (osobne pole),
+  - color_manufacturer_text/Herstellerfarbbezeichnung (osobne pole).
+Pozostale pola (np. genders/ages/colors) sa jedynie flagowane do recznej
+weryfikacji wzgledem zamknietych list kodow, bez automatycznej zmiany wartosci.
+
 Kazda funkcja fix_* zwraca (nowa_wartosc, zmieniono: bool, opis: str|None).
 process_product() spina wszystko w jeden przebieg per produkt i zwraca:
   - poprawiony wiersz (OrderedDict)
@@ -22,6 +31,7 @@ COLOR_MANUFACTURER_CANDIDATES = ["color_manufacturer_text", "Herstellerfarbbezei
 MATERIAL_CODE_CANDIDATES = ["materialComposition_de", "Materialzusammensetzung"]
 GENDER_CODE_CANDIDATES = ["genders", "Geschlecht"]
 AGE_CODE_CANDIDATES = ["ages", "Altersgruppe"]
+COLORS_FIELD_CANDIDATES = ["colors", "Limango Farbe"]
 
 
 def _first_present(row: dict, candidates: list[str]) -> str | None:
@@ -74,41 +84,164 @@ def fix_double_spaces_and_grammar(text: str) -> tuple[str, bool]:
 
 
 def normalize_gender(value: str) -> tuple[str, bool, str | None]:
+    """Poprawna wartosc pola to CODE: female/male/unisex (angielski - code i label
+    sa tu identyczne). Zgodnie z ustaleniem o ograniczonym zakresie auto-tlumaczenia,
+    wartosc NIE jest tu zmieniana automatycznie - tylko flagowana z podpowiedzia
+    poprawnego kodu."""
     if not value:
         return value, False, None
     v = value.strip()
-    if v in D.GENDERS_VALID_DE:
+    if v in D.GENDERS_VALID_CODES:
         return v, False, None
-    if v.lower() in D.GENDERS_EN_TO_DE:
-        return D.GENDERS_EN_TO_DE[v.lower()], True, f"Przetlumaczono wartosc '{v}' na niemiecki token."
-    return v, False, f"Nieznana wartosc '{v}' dla pola plci - brak w slowniku, wymaga sprawdzenia."
+    suggestion = D.GENDERS_LABEL_TO_CODE.get(v.lower())
+    if suggestion:
+        return v, False, (f"Wartosc '{v}' nie jest poprawnym kodem pola - "
+                           f"powinno byc: '{suggestion}'.")
+    return v, False, (f"Nieznana wartosc '{v}' dla pola plci - oczekiwany kod to jeden z: "
+                       f"{sorted(D.GENDERS_VALID_CODES)}.")
 
 
 def normalize_age(value: str) -> tuple[str, bool, str | None]:
+    """Poprawna wartosc pola to CODE: baby/child/adult (angielski, l. pojedyncza).
+    Zgodnie z ustaleniem o ograniczonym zakresie auto-tlumaczenia, wartosc NIE
+    jest tu zmieniana automatycznie - tylko flagowana z podpowiedzia poprawnego
+    kodu."""
     if not value:
         return value, False, None
     v = value.strip()
-    if v in D.AGES_VALID_DE:
+    if v in D.AGES_VALID_CODES:
         return v, False, None
-    if v.lower() in D.AGES_EN_TO_DE:
-        return D.AGES_EN_TO_DE[v.lower()], True, f"Przetlumaczono wartosc '{v}' na niemiecki token."
-    return v, False, f"Nieznana wartosc '{v}' dla grupy wiekowej - brak w slowniku, wymaga sprawdzenia."
+    suggestion = D.AGES_LABEL_TO_CODE.get(v.lower())
+    if suggestion:
+        return v, False, (f"Wartosc '{v}' to etykieta (label), nie poprawny kod (code) pola - "
+                           f"powinno byc: '{suggestion}'.")
+    return v, False, (f"Nieznana wartosc '{v}' dla grupy wiekowej - oczekiwany kod to jeden z: "
+                       f"{sorted(D.AGES_VALID_CODES)}.")
+
+
+def normalize_colors_field(value: str) -> tuple[str, bool, str | None]:
+    """Pole 'colors'/'Limango Farbe' - zamkniety slownik kodow (patrz
+    COLORS_VALID_CODES). Wartosc moze byc wielokrotna, rozdzielona '|'
+    (zaobserwowane w good_data_1.xml). Tylko flagowanie, bez auto-zmiany,
+    zgodnie z ustalonym zakresem auto-tlumaczenia."""
+    if not value:
+        return value, False, None
+    tokens = [t.strip() for t in value.split("|") if t.strip()]
+    problems = []
+    for t in tokens:
+        if t.lower() in D.COLORS_VALID_CODES:
+            continue
+        suggestion = D.COLORS_LABEL_TO_CODE.get(t.lower())
+        if suggestion:
+            problems.append(f"'{t}' -> powinno byc '{suggestion}'")
+        else:
+            problems.append(f"'{t}' - nieznany kod koloru")
+    if problems:
+        return value, False, "Pole colors: " + "; ".join(problems) + "."
+    return value, False, None
+
+
+def apply_translation_fixes(text: str) -> tuple[str, bool]:
+    """Wspolny zestaw poprawek jezykowych (EN->DE slowa koloru/materialu +
+    naprawa ucietych znakow specjalnych) - uzywany w tytule i w Long Description."""
+    if not text:
+        return text, False
+    changed_any = False
+    new_text, ch = fix_broken_umlauts(text)
+    changed_any = changed_any or ch
+    new_text, ch, _ = fix_color_word(new_text)
+    changed_any = changed_any or ch
+    for en, de in D.MATERIALS_EN_TO_DE.items():
+        if en == de:
+            continue
+        pattern = re.compile(rf"\b{re.escape(en)}\b")
+        if pattern.search(new_text):
+            new_text = pattern.sub(de, new_text)
+            changed_any = True
+    return new_text, changed_any
+
+
+def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
+    """Wymusza wzorzec tytulu '... in {color_manufacturer_text}' (color_manufacturer_text
+    jest zrodlem prawdy dla koloru w tytule). Kolejnosc sprawdzania (pierwsze
+    dopasowanie wygrywa):
+    1. kolor juz poprawnie poprzedzony 'in'/'im' - bez zmian,
+    2. kolor WYSTEPUJE w tytule, ale bez poprawnego przedrostka (przecinek,
+       myslnik, nic) - wstaw ' in ' bezposrednio przed nim,
+    3. tytul ma 'in X'/'im X' z INNYM kolorem X (kolor_value nie wystepuje
+       nigdzie w tytule) - podmien X na color_value,
+    4. kolor nigdzie nie wystepuje i nie ma zadnego 'in X' - dopisz na koncu."""
+    if not title or not color_value:
+        return title, False
+
+    # 1) kolor juz poprawny
+    exact = re.compile(r"\b(in|im)\s+" + re.escape(color_value) + r"\b", re.IGNORECASE)
+    if exact.search(title):
+        return title, False
+
+    # 2) kolor wystepuje w tytule, ale bez poprawnego 'in'/'im' przed nim
+    present = re.compile(r"[,\-–—]?\s*" + re.escape(color_value) + r"\b", re.IGNORECASE)
+    m = present.search(title)
+    if m:
+        color_start = m.end() - len(color_value)
+        original_color = title[color_start:m.end()]
+        new_title = title[:m.start()] + " in " + original_color + title[m.end():]
+        new_title = re.sub(r"\s{2,}", " ", new_title).strip()
+        return new_title, new_title != title
+
+    # 3) tytul ma 'in X'/'im X' z innym kolorem - podmien X na color_value
+    other = re.compile(r"\b(in|im)\s+([^,;()–—]+?)(?=\s*(?:[,;()–—]|$))", re.IGNORECASE)
+    m = other.search(title)
+    if m:
+        new_title = title[:m.start()] + "in " + color_value + title[m.end():]
+        new_title = re.sub(r"\s{2,}", " ", new_title).strip()
+        return new_title, new_title != title
+
+    # 4) kolor w ogole nie wystepuje w tytule - dopisz na koncu
+    new_title = f"{title.rstrip()} in {color_value}"
+    return new_title, True
+
+
+def apply_title_fixes_excluding_model(text: str, model_name: str) -> tuple[str, bool]:
+    """Stosuje naprawy formatowania/jezyka do tytulu, ALE nie dotyka fragmentu
+    bedacego dokladnie nazwa modelu (jesli wystepuje w tytule jako podciag) -
+    nazwa modelu/marki nie powinna byc tlumaczona."""
+    if not text:
+        return text, False
+    model_name = (model_name or "").strip()
+    if model_name and model_name in text:
+        idx = text.index(model_name)
+        before, after = text[:idx], text[idx + len(model_name):]
+        before_fixed, ch1 = fix_double_spaces_and_grammar(before)
+        before_fixed, ch1b = apply_translation_fixes(before_fixed)
+        after_fixed, ch2 = fix_double_spaces_and_grammar(after)
+        after_fixed, ch2b = apply_translation_fixes(after_fixed)
+        new_text = before_fixed + model_name + after_fixed
+        return new_text, ch1 or ch1b or ch2 or ch2b
+    new_text, ch1 = fix_double_spaces_and_grammar(text)
+    new_text, ch2 = apply_translation_fixes(new_text)
+    return new_text, ch1 or ch2
+
 
 
 def fix_color_word(value: str) -> tuple[str, bool, str | None]:
     if not value:
         return value, False, None
     changed_any = False
-    parts = re.split(r"([/\s])", value)  # zachowaj separatory "/" i spacje
-    out = []
-    for p in parts:
-        key = p.strip().lower()
-        if key in D.COLORS_EN_TO_DE:
-            out.append(D.COLORS_EN_TO_DE[key])
+
+    def _repl(m: re.Match) -> str:
+        nonlocal changed_any
+        word = m.group(0)
+        de = D.COLORS_EN_TO_DE.get(word.lower())
+        if de:
             changed_any = True
-        else:
-            out.append(p)
-    new_value = "".join(out)
+            return de
+        return word
+
+    # dopasowanie slow niezaleznie od otaczajacej interpunkcji (przecinki, kropki
+    # itp.) - wazne zwlaszcza w tekscie prozy (Long Description), nie tylko
+    # w krotkich, "czystych" polach jak tytul/kolor producenta
+    new_value = re.sub(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", _repl, value)
     note = "Przetlumaczono angielska nazwe koloru na niemiecka." if changed_any else None
     return new_value, changed_any, note
 
@@ -143,6 +276,32 @@ def singularize_de_label(label: str) -> str:
     if label.endswith("e"):
         return label[:-1]
     return label
+
+
+def build_dimension_suffix(row: dict) -> str | None:
+    """Buduje sufiks tytulu '(B)W x (H)H x (T)D cm' na podstawie pol wymiarow,
+    jesli sa kompletne (potwierdzone kody: width_numeric/height_numeric/
+    depth_numeric + warianty _unit, zrodlo: arkusz Columns z good_data_2.xlsx,
+    potwierdzone tez wzorcem tytulu z przykladu 'Wandspiegel 3039 in Walnuss –
+    (B)46 x (H)46 x (T)6 cm'). Zwraca None, jesli ktorykolwiek wymiar brakuje -
+    nie zgadujemy brakujacych wartosci."""
+    def _num(field):
+        val = row.get(field)
+        if val is None or str(val).strip() == "":
+            return None
+        try:
+            f = float(str(val).replace(",", "."))
+            return str(int(f)) if f == int(f) else str(f)
+        except ValueError:
+            return None
+
+    width = _num("width_numeric")
+    height = _num("height_numeric")
+    depth = _num("depth_numeric")
+    if width is None or height is None or depth is None:
+        return None
+    unit = str(row.get("width_numeric_unit") or row.get("height_numeric_unit") or "cm").strip() or "cm"
+    return f"(B){width} x (H){height} x (T){depth} {unit}"
 
 
 # --- glowna funkcja per-produkt --------------------------------------------------
@@ -201,29 +360,62 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
                          f"Sugerowana zmiana wymaga potwierdzenia."),
                         "manual_review"))
 
-    # --- tytul: naprawy formatowania -------------------------------------------
-    title_field = _first_present(new_row, TITLE_CODE_CANDIDATES)
-    if title_field and new_row.get(title_field):
-        text = str(new_row[title_field])
-        text2, ch1 = fix_double_spaces_and_grammar(text)
-        text3, ch2 = fix_broken_umlauts(text2)
-        if ch1 or ch2:
-            new_row[title_field] = text3
-            issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
-                                 f"Naprawiono formatowanie tytulu: '{text}' -> '{text3}'.",
-                                 "auto_fixed"))
-        if " in " not in text3 and " im " not in text3:
-            issues.append(issue(title_field, "TITLE_PATTERN_MISSING",
-                                 "Tytul nie zawiera wzorca 'Typ (+Model) in Farbe' - wymaga recznej weryfikacji.",
-                                 "manual_review"))
-
-    # --- kolor producenta: EN -> DE ---------------------------------------------
+    # --- kolor producenta: EN -> DE (przed tytulem, zeby uzyc poprawnej wartosci
+    # przy ustawianiu 'in' przed kolorem w tytule) ---------------------------------
     color_field = _first_present(new_row, COLOR_MANUFACTURER_CANDIDATES)
     if color_field and new_row.get(color_field):
         new_val, changed, note = fix_color_word(str(new_row[color_field]))
         if changed:
             new_row[color_field] = new_val
             issues.append(issue(color_field, "COLOR_LANGUAGE_FIXED", note, "auto_fixed"))
+
+    # --- tytul: naprawy formatowania + tlumaczenie EN->DE (poza nazwa modelu) ---
+    title_field = _first_present(new_row, TITLE_CODE_CANDIDATES)
+    if title_field and new_row.get(title_field):
+        text = str(new_row[title_field])
+        model_name = str(new_row.get("modelName_text", "") or "")
+        text4, changed = apply_title_fixes_excluding_model(text, model_name)
+
+        # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
+        # color_manufacturer_text, juz po ew. tlumaczeniu powyzej)
+        color_value = str(new_row.get(color_field, "") or "") if color_field else ""
+        text5, changed_in = ensure_in_before_color(text4, color_value)
+        if changed_in:
+            text4 = text5
+            changed = True
+
+        if changed:
+            new_row[title_field] = text4
+            issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
+                                 f"Naprawiono formatowanie/jezyk tytulu: '{text}' -> '{text4}'.",
+                                 "auto_fixed"))
+        if " in " not in text4 and " im " not in text4:
+            issues.append(issue(title_field, "TITLE_PATTERN_MISSING",
+                                 "Tytul nie zawiera wzorca 'Typ (+Model) in Farbe' - wymaga recznej weryfikacji.",
+                                 "manual_review"))
+
+        # Wymiary w tytule (onesize/hardgoods): wzorzec "... – (B)W x (H)H x (T)D cm"
+        # potwierdzony przykladem "Wandspiegel 3039 in Walnuss – (B)46 x (H)46 x (T)6 cm"
+        dim_suffix = build_dimension_suffix(new_row)
+        has_dim_in_title = bool(re.search(r"\(B\)|\(H\)|\(T\)", text4))
+        if dim_suffix and not has_dim_in_title:
+            new_title = f"{text4} – {dim_suffix}"
+            new_row[title_field] = new_title
+            issues.append(issue(title_field, "TITLE_DIMENSIONS_ADDED",
+                                 f"Dodano wymiary do tytulu na podstawie pol width/height/depth_numeric: '{new_title}'.",
+                                 "auto_fixed"))
+
+    # --- Long Description: te same poprawki jezykowe (EN->DE slowa koloru/materialu) -
+    desc_field = _first_present(new_row, DESC_CODE_CANDIDATES)
+    if desc_field and new_row.get(desc_field):
+        desc_text = str(new_row[desc_field])
+        desc_fixed, desc_changed = apply_translation_fixes(desc_text)
+        if desc_changed:
+            new_row[desc_field] = desc_fixed
+            issues.append(issue(desc_field, "DESCRIPTION_LANGUAGE_FIXED",
+                                 "Naprawiono jezyk/pisownie w Long Description (angielskie "
+                                 "slowa koloru/materialu, uciete znaki specjalne).",
+                                 "auto_fixed"))
 
     # --- material: format % + jezyk ----------------------------------------------
     mat_field = _first_present(new_row, MATERIAL_CODE_CANDIDATES)
@@ -233,24 +425,25 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
             new_row[mat_field] = new_val
             issues.append(issue(mat_field, "MATERIAL_FORMAT_FIXED", note, "auto_fixed"))
 
-    # --- genders / ages: tylko niemieckie tokeny ---------------------------------
+    # --- genders / ages: tylko flagowanie (bez auto-tlumaczenia - poza zakresem) -
     gender_field = _first_present(new_row, GENDER_CODE_CANDIDATES)
     if gender_field and new_row.get(gender_field):
-        new_val, changed, note = normalize_gender(str(new_row[gender_field]))
-        if changed:
-            new_row[gender_field] = new_val
-            issues.append(issue(gender_field, "GENDER_LANGUAGE_FIXED", note, "auto_fixed"))
-        elif note:
+        _, _, note = normalize_gender(str(new_row[gender_field]))
+        if note:
             issues.append(issue(gender_field, "GENDER_UNKNOWN_VALUE", note, "manual_review"))
 
     age_field = _first_present(new_row, AGE_CODE_CANDIDATES)
     if age_field and new_row.get(age_field):
-        new_val, changed, note = normalize_age(str(new_row[age_field]))
-        if changed:
-            new_row[age_field] = new_val
-            issues.append(issue(age_field, "AGE_LANGUAGE_FIXED", note, "auto_fixed"))
-        elif note:
+        _, _, note = normalize_age(str(new_row[age_field]))
+        if note:
             issues.append(issue(age_field, "AGE_UNKNOWN_VALUE", note, "manual_review"))
+
+    # --- colors: sprawdzenie wzgledem zamknietego slownika kodow -----------------
+    colors_field = _first_present(new_row, COLORS_FIELD_CANDIDATES)
+    if colors_field and new_row.get(colors_field):
+        _, _, note = normalize_colors_field(str(new_row[colors_field]))
+        if note:
+            issues.append(issue(colors_field, "COLOR_CODE_INVALID", note, "manual_review"))
 
     # --- modelName_text zanieczyszczony kolorem/rozmiarem (wykrycie, bez auto-fix) -
     model_field = "modelName_text" if "modelName_text" in new_row else None
