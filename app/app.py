@@ -33,11 +33,18 @@ CATEGORIES_PATH = os.path.join(APP_DIR, "data", "all_categories.json")
 
 st.set_page_config(page_title="Korekta danych produktowych", layout="wide")
 
-# Domyslny limit pandas Styler (262144 komorek = wiersze x kolumny) jest za niski
-# dla plikow Mirakl, ktore czesto maja dziesiatki/setki kolumn atrybutow -
-# podnosimy go, zeby podglad z podswietleniem (zakladka 1) nie rzucal
-# StreamlitAPIException przy wiekszych plikach.
-pd.set_option("styler.render.max_elements", 5_000_000)
+# Pandas Styler generuje CSS per-komorke w Pythonie - dla bardzo duzych tabel
+# (setki tysiecy+ komorek) jest to na tyle wolne/pamieciochlonne, ze na Streamlit
+# Community Cloud potrafi zawiesic aplikacje (OOM), a nie tylko rzucic wyjatek.
+# Dlatego zamiast bezmyslnie podnosic limit pandas, sami ograniczamy kiedy w ogole
+# probujemy stylowac (patrz MAX_STYLED_CELLS w main()); limit pandas podnosimy
+# tylko jako siatke bezpieczenstwa dla przypadkow tuz nad naszym progiem.
+pd.set_option("styler.render.max_elements", 1_000_000)
+
+# Powyzej tylu komorek w podgladzie pomijamy kolorowe podswietlenie (Styler) i
+# pokazujemy zwykla, szybka tabele - uzytkownik moze zawezic widok checkboxem
+# ponizej albo skorzystac z zakladki 'Raport problemow'.
+MAX_STYLED_CELLS = 300_000
 
 
 @st.cache_resource
@@ -142,20 +149,29 @@ def main():
             view_df = preview_df[preview_df[FLAG_COLUMN] != ""] if only_flagged else preview_df
         else:
             view_df = preview_df
-        styled = build_styler(view_df, issues_by_row)
-        st.dataframe(styled, use_container_width=True)
+        if view_df.size > MAX_STYLED_CELLS:
+            st.info(
+                f"Widok ma {view_df.size} komorek - kolorowe podswietlenie pol "
+                f"zostalo pominiete ze wzgledu na wydajnosc. Zawez widok checkboxem "
+                f"powyzej albo sprawdz zakladke 'Raport problemow', aby zobaczyc "
+                f"konkretne bledy."
+            )
+            st.dataframe(view_df, width="stretch")
+        else:
+            styled = build_styler(view_df, issues_by_row)
+            st.dataframe(styled, width="stretch")
 
     with tabs[1]:
         df = products_to_dataframe(corrected)
         df = add_flag_column(df, summary_by_row)
-        edited_df = st.data_editor(df, use_container_width=True, num_rows="fixed", key="editor")
+        edited_df = st.data_editor(df, width="stretch", num_rows="fixed", key="editor")
 
     with tabs[2]:
         if all_issues:
             report_df = pd.DataFrame(all_issues)[
                 ["line-number", "provider-unique-identifier", "attribute", "error_code", "severity", "message"]
             ]
-            st.dataframe(report_df, use_container_width=True)
+            st.dataframe(report_df, width="stretch")
         else:
             st.info("Nie znaleziono zadnych problemow.")
 
