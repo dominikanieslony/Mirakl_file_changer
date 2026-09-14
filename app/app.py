@@ -51,6 +51,38 @@ MAX_STYLED_CELLS = 300_000
 # zeby zmniejszyc obciazenie (czas przetwarzania + pamiec na renderowanie).
 MAX_ROWS_DEFAULT = 2000
 
+# Kolumny faktycznie analizowane/poprawiane przez rules_engine.py i validator.py
+# (patrz *_CANDIDATES w rules_engine.py, KNOWN_ENUM_TOKENS w dictionaries.py oraz
+# CORE_REQUIRED_FIELDS/GROUP_EXTRA_REQUIRED_FIELDS w field_requirements.py).
+# UWAGA: wczytujemy WYLACZNIE te kolumny - wszystkie pozostale pola z pliku
+# zrodlowego (cena, zdjecia, stan magazynowy, inne EAN-y itd.) sa odrzucane i
+# NIE trafiaja do pliku wynikowego (decyzja uzytkownika - swiadoma utrata danych
+# w zamian za mniejsza liczbe komorek do przetworzenia/wyrenderowania).
+RELEVANT_COLUMNS = {
+    "CATEGORY", "Kategorie",
+    "ShortDescription_de", "Produktname",
+    "LongDescription_de", "Langbeschreibung",
+    "color_manufacturer_text", "Herstellerfarbbezeichnung",
+    "materialComposition_de", "Materialzusammensetzung",
+    "genders", "Geschlecht",
+    "ages", "Altersgruppe",
+    "colors", "Limango Farbe",
+    "modelName_text",
+    "sizes",
+    "brandName", "Marke",
+    "width_numeric", "height_numeric", "depth_numeric",
+    "width_numeric_unit", "height_numeric_unit",
+    "clothing_underwire_text", "clothing_shapeProperties_text", "textiles_careInstructions_text",
+    "Std_EAN", "shop_sku", "Shop SKU",
+}
+
+
+def filter_relevant_columns(products: list[OrderedDict]) -> list[OrderedDict]:
+    return [
+        OrderedDict((k, v) for k, v in row.items() if k in RELEVANT_COLUMNS)
+        for row in products
+    ]
+
 
 @st.cache_resource
 def get_category_tree() -> CategoryTree:
@@ -99,7 +131,18 @@ def main():
         st.error(f"Nie udalo sie wczytac pliku: {e}")
         return
 
+    total_cols_original = len(products[0]) if products else 0
+    products = filter_relevant_columns(products)
+    kept_cols = len(products[0]) if products else 0
+
     st.success(f"Wczytano {len(products)} pozycji produktowych (format: {file_format}).")
+    if total_cols_original:
+        st.caption(
+            f"Wczytano tylko kolumny faktycznie analizowane przez aplikacje: "
+            f"{kept_cols} z {total_cols_original} kolumn oryginalnego pliku. "
+            f"Pozostale kolumny (np. cena, zdjecia, stan magazynowy) NIE zostana "
+            f"uwzglednione w pliku wynikowym do pobrania."
+        )
 
     total_rows = len(products)
     if total_rows > MAX_ROWS_DEFAULT:
