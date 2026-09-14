@@ -46,6 +46,11 @@ pd.set_option("styler.render.max_elements", 1_000_000)
 # ponizej albo skorzystac z zakladki 'Raport problemow'.
 MAX_STYLED_CELLS = 300_000
 
+# Domyslny sufit liczby wierszy przetwarzanych na raz - powyzej tego progu
+# proponujemy uzytkownikowi ograniczenie (przetwarzanie duzych plikow partiami),
+# zeby zmniejszyc obciazenie (czas przetwarzania + pamiec na renderowanie).
+MAX_ROWS_DEFAULT = 2000
+
 
 @st.cache_resource
 def get_category_tree() -> CategoryTree:
@@ -95,6 +100,24 @@ def main():
         return
 
     st.success(f"Wczytano {len(products)} pozycji produktowych (format: {file_format}).")
+
+    total_rows = len(products)
+    if total_rows > MAX_ROWS_DEFAULT:
+        st.warning(
+            f"Plik zawiera {total_rows} pozycji - przetwarzanie i podglad tak duzej "
+            f"liczby wierszy naraz moze byc wolne lub przeciazyc aplikacje. Ponizej "
+            f"mozesz ograniczyc liczbe przetwarzanych wierszy (np. przetwarzaj plik "
+            f"partiami)."
+        )
+    max_rows = st.number_input(
+        "Maksymalna liczba wierszy do przetworzenia (0 = wszystkie)",
+        min_value=0,
+        value=MAX_ROWS_DEFAULT if total_rows > MAX_ROWS_DEFAULT else 0,
+        step=100,
+    )
+    if max_rows and max_rows < total_rows:
+        products = products[:max_rows]
+        st.info(f"Ograniczono do pierwszych {max_rows} z {total_rows} wierszy.")
 
     if "processed" not in st.session_state:
         st.session_state.processed = False
