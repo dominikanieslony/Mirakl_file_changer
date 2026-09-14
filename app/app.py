@@ -54,10 +54,9 @@ MAX_ROWS_DEFAULT = 2000
 # Kolumny faktycznie analizowane/poprawiane przez rules_engine.py i validator.py
 # (patrz *_CANDIDATES w rules_engine.py, KNOWN_ENUM_TOKENS w dictionaries.py oraz
 # CORE_REQUIRED_FIELDS/GROUP_EXTRA_REQUIRED_FIELDS w field_requirements.py).
-# UWAGA: wczytujemy WYLACZNIE te kolumny - wszystkie pozostale pola z pliku
-# zrodlowego (cena, zdjecia, stan magazynowy, inne EAN-y itd.) sa odrzucane i
-# NIE trafiaja do pliku wynikowego (decyzja uzytkownika - swiadoma utrata danych
-# w zamian za mniejsza liczbe komorek do przetworzenia/wyrenderowania).
+# Uzywane WYLACZNIE do zawezenia widoku w zakladce 'Podglad z podswietleniem'
+# (tab 0) - dane wewnetrzne (przetwarzanie, edycja, eksport) zawsze zawieraja
+# WSZYSTKIE oryginalne kolumny z pliku, bez zadnej utraty danych.
 RELEVANT_COLUMNS = {
     "CATEGORY", "Kategorie",
     "ShortDescription_de", "Produktname",
@@ -75,13 +74,6 @@ RELEVANT_COLUMNS = {
     "clothing_underwire_text", "clothing_shapeProperties_text", "textiles_careInstructions_text",
     "Std_EAN", "shop_sku", "Shop SKU",
 }
-
-
-def filter_relevant_columns(products: list[OrderedDict]) -> list[OrderedDict]:
-    return [
-        OrderedDict((k, v) for k, v in row.items() if k in RELEVANT_COLUMNS)
-        for row in products
-    ]
 
 
 @st.cache_resource
@@ -131,18 +123,7 @@ def main():
         st.error(f"Nie udalo sie wczytac pliku: {e}")
         return
 
-    total_cols_original = len(products[0]) if products else 0
-    products = filter_relevant_columns(products)
-    kept_cols = len(products[0]) if products else 0
-
     st.success(f"Wczytano {len(products)} pozycji produktowych (format: {file_format}).")
-    if total_cols_original:
-        st.caption(
-            f"Wczytano tylko kolumny faktycznie analizowane przez aplikacje: "
-            f"{kept_cols} z {total_cols_original} kolumn oryginalnego pliku. "
-            f"Pozostale kolumny (np. cena, zdjecia, stan magazynowy) NIE zostana "
-            f"uwzglednione w pliku wynikowym do pobrania."
-        )
 
     total_rows = len(products)
     if total_rows > MAX_ROWS_DEFAULT:
@@ -205,10 +186,16 @@ def main():
     with tabs[0]:
         st.caption(
             "Zolte komorki to konkretne pola wymagajace recznej weryfikacji. "
-            "Kolumna 'Pola do sprawdzenia' podsumowuje je per wiersz. To widok "
-            "tylko do podgladu - edycji dokonaj w zakladce 'Poprawione dane'."
+            "Kolumna 'Pola do sprawdzenia' podsumowuje je per wiersz. Dla wydajnosci "
+            "ten podglad pokazuje tylko kolumny faktycznie analizowane przez "
+            "aplikacje - plik do pobrania (zakladka 'Poprawione dane') zawiera "
+            "WSZYSTKIE oryginalne kolumny bez zmian. To widok tylko do podgladu - "
+            "edycji dokonaj w zakladce 'Poprawione dane'."
         )
         preview_df = products_to_dataframe(corrected)
+        relevant_present = [c for c in preview_df.columns if c in RELEVANT_COLUMNS]
+        if relevant_present:
+            preview_df = preview_df[relevant_present]
         preview_df = add_flag_column(preview_df, summary_by_row)
         if manual_review:
             only_flagged = st.checkbox("Pokaz tylko wiersze wymagajace weryfikacji", value=True)
