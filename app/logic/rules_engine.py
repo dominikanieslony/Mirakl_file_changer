@@ -161,16 +161,32 @@ def apply_translation_fixes(text: str) -> tuple[str, bool]:
     return new_text, changed_any
 
 
+# niemieckie przymiotniki koloru odmieniaja sie przez rodzaj/przypadek (np.
+# "schwarz" -> "schwarzes/schwarzem/schwarzen/schwarze") - dopuszczamy typowe
+# koncowki, zeby wykryc kolor nawet gdy w tytule opisuje inny rzeczownik (np.
+# wzor/material: "mit schwarzem Schachbrettmuster"), a nie sam produkt.
+_COLOR_INFLECTION_SUFFIX = r"(?:e[mnrs]?)?"
+
+
 def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
     """Wymusza wzorzec tytulu '... in {color_manufacturer_text}' (color_manufacturer_text
     jest zrodlem prawdy dla koloru w tytule). Kolejnosc sprawdzania (pierwsze
     dopasowanie wygrywa):
     1. kolor juz poprawnie poprzedzony 'in'/'im' - bez zmian,
-    2. kolor WYSTEPUJE w tytule, ale bez poprawnego przedrostka (przecinek,
-       myslnik, nic) - wstaw ' in ' bezposrednio przed nim,
+    1b. kolor (nawet w odmienionej formie przymiotnikowej) wystepuje gdzies w
+        tytule, ale NIE jako dokladne slowo z (1) ani (2) - zwykle opisuje
+        cos innego niz sam produkt (wzor/material, np. "mit schwarzem
+        Schachbrettmuster"). Nie da sie bezpiecznie zgadnac, gdzie wstawic
+        'in Farbe' bez ryzyka zepsucia gramatyki lub zdublowania koloru -
+        zostawiamy tytul bez zmian (zostanie oflagowany do recznej
+        weryfikacji przez brak wzorca 'in'/'im' w process_product()),
+    2. kolor WYSTEPUJE w tytule (dokladne slowo), ale bez poprawnego
+       przedrostka (przecinek, myslnik, nic) - wstaw ' in ' bezposrednio
+       przed nim,
     3. tytul ma 'in X'/'im X' z INNYM kolorem X (kolor_value nie wystepuje
        nigdzie w tytule) - podmien X na color_value,
-    4. kolor nigdzie nie wystepuje i nie ma zadnego 'in X' - dopisz na koncu."""
+    4. kolor nigdzie nie wystepuje (nawet w formie odmienionej) i nie ma
+       zadnego 'in X' - dopisz na koncu."""
     if not title or not color_value:
         return title, False
 
@@ -196,6 +212,12 @@ def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
         new_title = title[:m.start()] + "in " + color_value + title[m.end():]
         new_title = re.sub(r"\s{2,}", " ", new_title).strip()
         return new_title, new_title != title
+
+    # 1b) kolor w odmienionej formie przymiotnikowej wystepuje gdzies indziej
+    # w tytule (patrz docstring) - nie zgadujemy, zostawiamy bez zmian.
+    inflected = re.compile(re.escape(color_value) + _COLOR_INFLECTION_SUFFIX + r"\b", re.IGNORECASE)
+    if inflected.search(title):
+        return title, False
 
     # 4) kolor w ogole nie wystepuje w tytule - dopisz na koncu
     new_title = f"{title.rstrip()} in {color_value}"
