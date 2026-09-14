@@ -16,6 +16,7 @@ Obserwacje z good_data_2.xlsx / good_data_5.xlsx:
 """
 from __future__ import annotations
 
+import datetime
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -24,6 +25,25 @@ import openpyxl
 import pandas as pd
 
 AUX_SHEET_NAMES = {"referencedata", "columns", "error details", "errordetails"}
+
+
+def _cell_to_str(val) -> str:
+    """Rzutuje wartosc komorki XLSX (openpyxl zwraca natywne typy Pythona: int,
+    float, datetime, bool...) na string, zeby wszystkie pola byly spojnie
+    tekstowe - tak jak w parserze CSV (dtype=str) i XML (wartosci zawsze text).
+    Mieszanie typow w jednej kolumnie DataFrame (np. str + float + datetime)
+    psuje serializacje do Arrow przy renderowaniu w Streamlit."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        return str(int(val)) if val.is_integer() else str(val)
+    if isinstance(val, datetime.datetime):
+        if val.time() == datetime.time(0, 0):
+            return val.strftime("%Y-%m-%d")
+        return val.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(val, datetime.date):
+        return val.strftime("%Y-%m-%d")
+    return str(val)
 
 
 @dataclass
@@ -111,7 +131,7 @@ def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
         row = OrderedDict()
         for i, code in enumerate(codes):
             val = r[i] if i < len(r) else None
-            row[code] = "" if val is None else val
+            row[code] = _cell_to_str(val)
         products.append(row)
 
     meta = TabularMeta(

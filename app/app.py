@@ -33,6 +33,12 @@ CATEGORIES_PATH = os.path.join(APP_DIR, "data", "all_categories.json")
 
 st.set_page_config(page_title="Korekta danych produktowych", layout="wide")
 
+# Domyslny limit pandas Styler (262144 komorek = wiersze x kolumny) jest za niski
+# dla plikow Mirakl, ktore czesto maja dziesiatki/setki kolumn atrybutow -
+# podnosimy go, zeby podglad z podswietleniem (zakladka 1) nie rzucal
+# StreamlitAPIException przy wiekszych plikach.
+pd.set_option("styler.render.max_elements", 5_000_000)
+
 
 @st.cache_resource
 def get_category_tree() -> CategoryTree:
