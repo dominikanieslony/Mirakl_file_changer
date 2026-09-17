@@ -33,6 +33,13 @@ GENDER_CODE_CANDIDATES = ["genders", "Geschlecht"]
 AGE_CODE_CANDIDATES = ["ages", "Altersgruppe"]
 COLORS_FIELD_CANDIDATES = ["colors", "Limango Farbe"]
 
+# slowa plci/demografii, ktore nie powinny wystepowac w tytule (docelowy format
+# "Typ produktu + Model + in Kolor" - zalozenie 1d w README.md; plec produktu
+# jest juz osobno w polu `genders`, ktorego walidacja NIE zmienia sie przez to).
+TITLE_GENDER_WORDS = {
+    "mädchen", "jungen", "junge", "baby", "damen", "herren", "kinder", "unisex",
+}
+
 
 def _first_present(row: dict, candidates: list[str]) -> str | None:
     for c in candidates:
@@ -161,32 +168,18 @@ def apply_translation_fixes(text: str) -> tuple[str, bool]:
     return new_text, changed_any
 
 
-# niemieckie przymiotniki koloru odmieniaja sie przez rodzaj/przypadek (np.
-# "schwarz" -> "schwarzes/schwarzem/schwarzen/schwarze") - dopuszczamy typowe
-# koncowki, zeby wykryc kolor nawet gdy w tytule opisuje inny rzeczownik (np.
-# wzor/material: "mit schwarzem Schachbrettmuster"), a nie sam produkt.
-_COLOR_INFLECTION_SUFFIX = r"(?:e[mnrs]?)?"
-
-
 def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
     """Wymusza wzorzec tytulu '... in {color_manufacturer_text}' (color_manufacturer_text
-    jest zrodlem prawdy dla koloru w tytule). Kolejnosc sprawdzania (pierwsze
-    dopasowanie wygrywa):
+    jest zrodlem prawdy dla koloru w tytule - zawsze, bez wyjatkow, potwierdzone
+    przez uzytkownika). Zaklada, ze tytul zostal juz oczyszczony z tresci, ktora
+    duplikowalaby kolor (patrz strip_title_junk() - wywolywane PRZED ta funkcja
+    w process_product()). Kolejnosc sprawdzania (pierwsze dopasowanie wygrywa):
     1. kolor juz poprawnie poprzedzony 'in'/'im' - bez zmian,
-    1b. kolor (nawet w odmienionej formie przymiotnikowej) wystepuje gdzies w
-        tytule, ale NIE jako dokladne slowo z (1) ani (2) - zwykle opisuje
-        cos innego niz sam produkt (wzor/material, np. "mit schwarzem
-        Schachbrettmuster"). Nie da sie bezpiecznie zgadnac, gdzie wstawic
-        'in Farbe' bez ryzyka zepsucia gramatyki lub zdublowania koloru -
-        zostawiamy tytul bez zmian (zostanie oflagowany do recznej
-        weryfikacji przez brak wzorca 'in'/'im' w process_product()),
-    2. kolor WYSTEPUJE w tytule (dokladne slowo), ale bez poprawnego
-       przedrostka (przecinek, myslnik, nic) - wstaw ' in ' bezposrednio
-       przed nim,
+    2. kolor WYSTEPUJE w tytule, ale bez poprawnego przedrostka (przecinek,
+       myslnik, nic) - wstaw ' in ' bezposrednio przed nim,
     3. tytul ma 'in X'/'im X' z INNYM kolorem X (kolor_value nie wystepuje
        nigdzie w tytule) - podmien X na color_value,
-    4. kolor nigdzie nie wystepuje (nawet w formie odmienionej) i nie ma
-       zadnego 'in X' - dopisz na koncu."""
+    4. kolor nigdzie nie wystepuje i nie ma zadnego 'in X' - dopisz na koncu."""
     if not title or not color_value:
         return title, False
 
@@ -213,14 +206,103 @@ def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
         new_title = re.sub(r"\s{2,}", " ", new_title).strip()
         return new_title, new_title != title
 
-    # 1b) kolor w odmienionej formie przymiotnikowej wystepuje gdzies indziej
-    # w tytule (patrz docstring) - nie zgadujemy, zostawiamy bez zmian.
-    inflected = re.compile(re.escape(color_value) + _COLOR_INFLECTION_SUFFIX + r"\b", re.IGNORECASE)
-    if inflected.search(title):
-        return title, False
-
     # 4) kolor w ogole nie wystepuje w tytule - dopisz na koncu
     new_title = f"{title.rstrip()} in {color_value}"
+    return new_title, True
+
+
+def _strip_gender_words(text: str) -> tuple[str, bool]:
+    """Usuwa z tekstu slowa plci/demografii (TITLE_GENDER_WORDS), gdziekolwiek
+    wystepuja jako cale slowo - obsluguje zarowno forme ze spacja
+    ("Baby Madchen X" -> "X"), jak i z lacznikiem ("Madchen-Set" -> "Set")."""
+    if not text:
+        return text, False
+    new_text = text
+    changed = False
+    for word in TITLE_GENDER_WORDS:
+        pattern = re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)
+        if pattern.search(new_text):
+            new_text = pattern.sub("", new_text)
+            changed = True
+    if not changed:
+        return text, False
+    # sprzataj slady po usunieciu (osierocone laczniki/dwukropki/przecinki na
+    # brzegach, nadmiarowe spacje)
+    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
+    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
+def _strip_trailing_mit_clause(text: str) -> tuple[str, bool]:
+    """Usuwa ostatnia klauzule 'mit X' w tytule (od 'mit' do konca stringa) -
+    zwykle stary opis wzoru/materialu, ktory zostanie zastapiony pelniejszym
+    opisem w 'in {color_manufacturer_text}' (patrz ensure_in_before_color,
+    wywolywane PO tej funkcji w process_product())."""
+    if not text:
+        return text, False
+    matches = list(re.finditer(r"\bmit\b", text, re.IGNORECASE))
+    if not matches:
+        return text, False
+    last = matches[-1]
+    new_text = text[:last.start()]
+    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    if not new_text:
+        # cale zdanie to byla klauzula 'mit X' - nie zostawiaj pustego tytulu
+        return text, False
+    return new_text, True
+
+
+def strip_title_junk(title: str, model_name: str) -> tuple[str, bool]:
+    """Usuwa z tytulu tresci niezgodne z docelowym formatem 'Typ produktu +
+    Model + in Kolor' (zalozenie 1d w README.md): slowa plci/demografii oraz
+    ostatnia klauzule 'mit X' (patrz _strip_gender_words/_strip_trailing_mit_clause).
+    Fragment bedacy dokladnie model_name jest chroniony przed modyfikacja,
+    tak jak w apply_title_fixes_excluding_model."""
+    if not title:
+        return title, False
+    model_name = (model_name or "").strip()
+
+    def _clean(segment: str) -> tuple[str, bool]:
+        t, ch1 = _strip_gender_words(segment)
+        t, ch2 = _strip_trailing_mit_clause(t)
+        return t, ch1 or ch2
+
+    if model_name and model_name in title:
+        idx = title.index(model_name)
+        before, after = title[:idx], title[idx + len(model_name):]
+        before_fixed, ch1 = _clean(before)
+        after_fixed, ch2 = _clean(after)
+        # _clean() moze przyciac spacje na brzegach segmentu (przy usuwaniu
+        # osieroconej interpunkcji) - laczymy przez " ".join na niepustych
+        # czesciach, a nie przez surowa konkatenacje, zeby nie zlepic slow
+        # bez odstepu (np. "T-Shirt" + "ModelXYZ" -> "T-ShirtModelXYZ").
+        parts = [p.strip() for p in (before_fixed, model_name, after_fixed)]
+        new_title = " ".join(p for p in parts if p)
+        return new_title, (ch1 or ch2) and new_title != title
+
+    new_title, changed = _clean(title)
+    return new_title, changed
+
+
+def _normalize_for_compare(text: str) -> str:
+    """Normalizuje spacje/lacznik, zeby porownac np. 'Sherpa Jacke' (w tytule)
+    z 'Sherpa-Jacke' (modelName_text) jako ten sam tekst - w danych zdarzaja
+    sie oba separatory dla tego samego modelu."""
+    return re.sub(r"[\s\-]+", " ", text).strip().lower()
+
+
+def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
+    """Jesli modelName_text nie wystepuje w tytule (nawet w formie z innym
+    separatorem czlonow - patrz _normalize_for_compare) - dopisuje go na koncu
+    tytulu. Wywolywane PRZED ensure_in_before_color w process_product(), zeby
+    kolejnosc koncowa byla 'Typ produktu + Model + in Kolor'."""
+    model_name = (model_name or "").strip()
+    if not model_name or not title:
+        return title, False
+    if _normalize_for_compare(model_name) in _normalize_for_compare(title):
+        return title, False
+    new_title = f"{title.rstrip()} {model_name}"
     return new_title, True
 
 
@@ -391,12 +473,24 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
             new_row[color_field] = new_val
             issues.append(issue(color_field, "COLOR_LANGUAGE_FIXED", note, "auto_fixed"))
 
-    # --- tytul: naprawy formatowania + tlumaczenie EN->DE (poza nazwa modelu) ---
+    # --- tytul: docelowy format "Typ produktu + Model + in Kolor" (zalozenie
+    # 1d w README.md) - usuwamy smieci (plec, stary opis wzoru dublujacy
+    # kolor), naprawiamy jezyk/formatowanie, upewniamy sie ze model i kolor sa
+    # obecne (poza nazwa modelu, ktora nigdy nie jest modyfikowana) ---------
     title_field = _first_present(new_row, TITLE_CODE_CANDIDATES)
     if title_field and new_row.get(title_field):
         text = str(new_row[title_field])
         model_name = str(new_row.get("modelName_text", "") or "")
-        text4, changed = apply_title_fixes_excluding_model(text, model_name)
+
+        text4, changed = strip_title_junk(text, model_name)
+
+        text_translated, ch_translate = apply_title_fixes_excluding_model(text4, model_name)
+        text4 = text_translated
+        changed = changed or ch_translate
+
+        text_model, ch_model = ensure_model_present(text4, model_name)
+        text4 = text_model
+        changed = changed or ch_model
 
         # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
         # color_manufacturer_text, juz po ew. tlumaczeniu powyzej)
