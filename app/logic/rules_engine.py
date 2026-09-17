@@ -253,15 +253,31 @@ def _strip_trailing_mit_clause(text: str) -> tuple[str, bool]:
     return new_text, True
 
 
+# modelName_text w danych bywa (zaobserwowane) blednie ustawione na caly
+# tytul zamiast na krotki kod/nazwe modelu - w takim przypadku "ochrona"
+# tego fragmentu przed modyfikacja zablokowalaby cale czyszczenie tytulu
+# (bo caly tytul zostalby uznany za "model"). Traktujemy jako prawdziwy,
+# chroniony model tylko rozsadnie krotkie wartosci (kod/nazwa produktu,
+# nie pelne zdanie).
+_MAX_MODEL_WORDS = 4
+
+
+def _looks_like_genuine_model(model_name: str) -> bool:
+    return bool(model_name) and len(model_name.split()) <= _MAX_MODEL_WORDS
+
+
 def strip_title_junk(title: str, model_name: str) -> tuple[str, bool]:
     """Usuwa z tytulu tresci niezgodne z docelowym formatem 'Typ produktu +
     Model + in Kolor' (zalozenie 1d w README.md): slowa plci/demografii oraz
     ostatnia klauzule 'mit X' (patrz _strip_gender_words/_strip_trailing_mit_clause).
     Fragment bedacy dokladnie model_name jest chroniony przed modyfikacja,
-    tak jak w apply_title_fixes_excluding_model."""
+    tak jak w apply_title_fixes_excluding_model - ale TYLKO gdy model_name
+    wyglada na prawdziwy, krotki model (patrz _looks_like_genuine_model)."""
     if not title:
         return title, False
     model_name = (model_name or "").strip()
+    if not _looks_like_genuine_model(model_name):
+        model_name = ""
 
     def _clean(segment: str) -> tuple[str, bool]:
         t, ch1 = _strip_gender_words(segment)
@@ -296,9 +312,11 @@ def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
     """Jesli modelName_text nie wystepuje w tytule (nawet w formie z innym
     separatorem czlonow - patrz _normalize_for_compare) - dopisuje go na koncu
     tytulu. Wywolywane PRZED ensure_in_before_color w process_product(), zeby
-    kolejnosc koncowa byla 'Typ produktu + Model + in Kolor'."""
+    kolejnosc koncowa byla 'Typ produktu + Model + in Kolor'. Nie dopisuje nic,
+    gdy model_name nie wyglada na prawdziwy, krotki model (patrz
+    _looks_like_genuine_model) - inaczej blednie zdublowalibysmy caly tytul."""
     model_name = (model_name or "").strip()
-    if not model_name or not title:
+    if not model_name or not title or not _looks_like_genuine_model(model_name):
         return title, False
     if _normalize_for_compare(model_name) in _normalize_for_compare(title):
         return title, False
@@ -309,10 +327,15 @@ def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
 def apply_title_fixes_excluding_model(text: str, model_name: str) -> tuple[str, bool]:
     """Stosuje naprawy formatowania/jezyka do tytulu, ALE nie dotyka fragmentu
     bedacego dokladnie nazwa modelu (jesli wystepuje w tytule jako podciag) -
-    nazwa modelu/marki nie powinna byc tlumaczona."""
+    nazwa modelu/marki nie powinna byc tlumaczona. Ochrona dziala TYLKO gdy
+    model_name wyglada na prawdziwy, krotki model (patrz
+    _looks_like_genuine_model) - w danych zdarza sie, ze to pole bledne
+    powiela caly tytul, co zablokowaloby wszystkie poprawki."""
     if not text:
         return text, False
     model_name = (model_name or "").strip()
+    if not _looks_like_genuine_model(model_name):
+        model_name = ""
     if model_name and model_name in text:
         idx = text.index(model_name)
         before, after = text[:idx], text[idx + len(model_name):]
