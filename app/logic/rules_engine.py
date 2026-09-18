@@ -23,6 +23,8 @@ from collections import OrderedDict
 
 from . import dictionaries as D
 from .categories import CategoryTree
+from .categories import _normalize as _cat_normalize
+from .categories import _stem as _cat_stem
 
 TITLE_CODE_CANDIDATES = ["ShortDescription_de", "Produktname"]
 DESC_CODE_CANDIDATES = ["LongDescription_de", "Langbeschreibung"]
@@ -253,51 +255,128 @@ def _strip_trailing_mit_clause(text: str) -> tuple[str, bool]:
     return new_text, True
 
 
-# modelName_text w danych bywa (zaobserwowane) blednie ustawione na caly
-# tytul zamiast na krotki kod/nazwe modelu - w takim przypadku "ochrona"
-# tego fragmentu przed modyfikacja zablokowalaby cale czyszczenie tytulu
-# (bo caly tytul zostalby uznany za "model"). Traktujemy jako prawdziwy,
-# chroniony model tylko rozsadnie krotkie wartosci (kod/nazwa produktu,
-# nie pelne zdanie).
-_MAX_MODEL_WORDS = 4
+# modelName_text/brandName w danych bywaja (zaobserwowane) blednie ustawione
+# na caly tytul zamiast na krotki kod/nazwe modelu lub marki - w takim
+# przypadku probe usuniecia/ochrony tego "fragmentu" nie zadzialalaby
+# poprawnie (albo zablokowalaby cale czyszczenie tytulu, albo nie znalazlaby
+# dopasowania wcale). Traktujemy jako prawdziwa, krotka wartosc (model/marke)
+# tylko rozsadnie krotkie teksty (kod/nazwa produktu, nie pelne zdanie).
+_MAX_SHORT_VALUE_WORDS = 4
 
 
-def _looks_like_genuine_model(model_name: str) -> bool:
-    return bool(model_name) and len(model_name.split()) <= _MAX_MODEL_WORDS
+def _looks_like_short_value(value: str) -> bool:
+    return bool(value) and len(value.split()) <= _MAX_SHORT_VALUE_WORDS
 
 
-def strip_title_junk(title: str, model_name: str) -> tuple[str, bool]:
+def _find_model_span(text: str, model_name: str) -> tuple[int, int] | None:
+    """Znajduje model_name w text bez wzgledu na wielkosc liter (w danych
+    zdarza sie niespojnosc, np. modelName_text='G-Rose' a w tytule 'G-ROSE' -
+    dopasowanie z rozroznianiem wielkosci liter nie wykrywaloby wtedy modelu,
+    co pozwalaloby innym poprawkom go znieksztalcic - patrz fix_color_word
+    tlumaczace 'ROSE' jako oddzielne slowo-kolor). Zwraca (start, end) w
+    oryginalnym text, zeby zachowac oryginalna pisownie dopasowania."""
+    if not model_name:
+        return None
+    m = re.search(re.escape(model_name), text, re.IGNORECASE)
+    return (m.start(), m.end()) if m else None
+
+
+def _strip_brand_name(text: str, brand_name: str) -> tuple[str, bool]:
+    """Usuwa nazwe marki (brandName/Marke) z tekstu, gdziekolwiek wystepuje -
+    marka nie powinna byc czescia tytulu w docelowym formacie 'Typ produktu +
+    Model + in Kolor'. Tak jak modelName_text, brandName w danych bywa blednie
+    ustawione na caly tytul - w takim przypadku nie probujemy nic usuwac
+    (patrz _looks_like_short_value)."""
+    brand_name = (brand_name or "").strip()
+    if not brand_name or not text or not _looks_like_short_value(brand_name):
+        return text, False
+    pattern = re.compile(re.escape(brand_name), re.IGNORECASE)
+    if not pattern.search(text):
+        return text, False
+    new_text = pattern.sub("", text)
+    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
+    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
+def _category_type_tokens(category_tree, resolved_code: str | None) -> set[str]:
+    """Zwraca stemowane tokeny (dlugosc >=4) z etykiety kategorii-liscia -
+    sygnal do rozpoznania, ktora fraza w tytule jest prawdziwym 'Typem
+    produktu' gdy jest ich wiecej niz jedna kandydatka (patrz
+    strip_title_junk). Reuzywa _normalize/_stem z logic.categories - ta sama
+    heurystyka co suggest_category()/current_category_supported_by_text()."""
+    if not resolved_code or category_tree is None:
+        return set()
+    label = category_tree.label_for(resolved_code) or ""
+    return {_cat_stem(t) for t in _cat_normalize(label).split() if len(t) >= 4}
+
+
+def _phrase_match_score(phrase: str, category_tokens: set[str]) -> int:
+    """Liczy ile category_tokens ma dopasowanie (substring w dowolna strone)
+    z ktoregokolwiek stemowanego tokenu frazy - potrzebne bo tytuly bywaja
+    jednym zlozonym slowem ('Softshelljacke'), a etykieta kategorii dwoma
+    ('Softshell Jacken'): 'softshell' i 'jack' oba pasuja jako podciagi
+    'softshelljack'."""
+    if not phrase or not category_tokens:
+        return 0
+    phrase_tokens = {_cat_stem(t) for t in _cat_normalize(phrase).split() if len(t) >= 4}
+    if not phrase_tokens:
+        return 0
+    return sum(
+        1 for cat_tok in category_tokens
+        if any(cat_tok in p or p in cat_tok for p in phrase_tokens)
+    )
+
+
+def strip_title_junk(
+    title: str,
+    model_name: str,
+    brand_name: str = "",
+    category_tokens: set[str] | None = None,
+) -> tuple[str, bool]:
     """Usuwa z tytulu tresci niezgodne z docelowym formatem 'Typ produktu +
-    Model + in Kolor' (zalozenie 1d w README.md): slowa plci/demografii oraz
-    ostatnia klauzule 'mit X' (patrz _strip_gender_words/_strip_trailing_mit_clause).
-    Fragment bedacy dokladnie model_name jest chroniony przed modyfikacja,
-    tak jak w apply_title_fixes_excluding_model - ale TYLKO gdy model_name
-    wyglada na prawdziwy, krotki model (patrz _looks_like_genuine_model)."""
+    Model + in Kolor' (zalozenie 1d w README.md): marke, slowa plci/demografii
+    oraz - gdy prawdziwy model jest znaleziony w tytule (patrz
+    _looks_like_short_value/_find_model_span) - fragment PO modelu (bo nic
+    nie powinno nastepowac po modelu poza kolorem, ktory dostawia
+    ensure_in_before_color). Gdy tytul ma DWIE kandydatki na 'Typ produktu'
+    (przed modelem i po modelu - np. zdublowany opis typu), category_tokens
+    (patrz _category_type_tokens) rozstrzyga ktora zatrzymac poprzez
+    dopasowanie do etykiety kategorii-liscia (_phrase_match_score); bez
+    category_tokens domyslnie wygrywa fragment przed modelem, tak jak
+    dotychczas. Bez rozpoznanego modelu usuwana jest tylko ostatnia klauzula
+    'mit X' (patrz _strip_trailing_mit_clause)."""
     if not title:
         return title, False
     model_name = (model_name or "").strip()
-    if not _looks_like_genuine_model(model_name):
+    if not _looks_like_short_value(model_name):
         model_name = ""
 
-    def _clean(segment: str) -> tuple[str, bool]:
+    def _clean_segment(segment: str) -> tuple[str, bool]:
         t, ch1 = _strip_gender_words(segment)
-        t, ch2 = _strip_trailing_mit_clause(t)
-        return t, ch1 or ch2
+        t, ch2 = _strip_brand_name(t, brand_name)
+        t, ch3 = _strip_trailing_mit_clause(t)
+        return t, ch1 or ch2 or ch3
 
-    if model_name and model_name in title:
-        idx = title.index(model_name)
-        before, after = title[:idx], title[idx + len(model_name):]
-        before_fixed, ch1 = _clean(before)
-        after_fixed, ch2 = _clean(after)
-        # _clean() moze przyciac spacje na brzegach segmentu (przy usuwaniu
-        # osieroconej interpunkcji) - laczymy przez " ".join na niepustych
-        # czesciach, a nie przez surowa konkatenacje, zeby nie zlepic slow
-        # bez odstepu (np. "T-Shirt" + "ModelXYZ" -> "T-ShirtModelXYZ").
-        parts = [p.strip() for p in (before_fixed, model_name, after_fixed)]
+    span = _find_model_span(title, model_name) if model_name else None
+    if span:
+        before, model_actual, after = title[:span[0]], title[span[0]:span[1]], title[span[1]:]
+        before_fixed, _ = _clean_segment(before)
+        after_fixed, _ = _clean_segment(after)
+
+        use_after_as_type = False
+        if category_tokens:
+            score_before = _phrase_match_score(before_fixed, category_tokens)
+            score_after = _phrase_match_score(after_fixed, category_tokens)
+            use_after_as_type = score_after > score_before
+
+        kept_type = after_fixed if use_after_as_type else before_fixed
+        parts = [kept_type.strip(), model_actual.strip()]
         new_title = " ".join(p for p in parts if p)
-        return new_title, (ch1 or ch2) and new_title != title
+        return new_title, new_title != title
 
-    new_title, changed = _clean(title)
+    new_title, changed = _clean_segment(title)
     return new_title, changed
 
 
@@ -314,9 +393,9 @@ def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
     tytulu. Wywolywane PRZED ensure_in_before_color w process_product(), zeby
     kolejnosc koncowa byla 'Typ produktu + Model + in Kolor'. Nie dopisuje nic,
     gdy model_name nie wyglada na prawdziwy, krotki model (patrz
-    _looks_like_genuine_model) - inaczej blednie zdublowalibysmy caly tytul."""
+    _looks_like_short_value) - inaczej blednie zdublowalibysmy caly tytul."""
     model_name = (model_name or "").strip()
-    if not model_name or not title or not _looks_like_genuine_model(model_name):
+    if not model_name or not title or not _looks_like_short_value(model_name):
         return title, False
     if _normalize_for_compare(model_name) in _normalize_for_compare(title):
         return title, False
@@ -326,24 +405,25 @@ def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
 
 def apply_title_fixes_excluding_model(text: str, model_name: str) -> tuple[str, bool]:
     """Stosuje naprawy formatowania/jezyka do tytulu, ALE nie dotyka fragmentu
-    bedacego dokladnie nazwa modelu (jesli wystepuje w tytule jako podciag) -
-    nazwa modelu/marki nie powinna byc tlumaczona. Ochrona dziala TYLKO gdy
-    model_name wyglada na prawdziwy, krotki model (patrz
-    _looks_like_genuine_model) - w danych zdarza sie, ze to pole bledne
-    powiela caly tytul, co zablokowaloby wszystkie poprawki."""
+    bedacego nazwa modelu (dopasowanie bez wzgledu na wielkosc liter - patrz
+    _find_model_span - bo modelName_text bywa zapisany inna wielkoscia liter
+    niz w tytule, np. 'G-Rose' vs 'G-ROSE') - nazwa modelu/marki nie powinna
+    byc tlumaczona. Ochrona dziala TYLKO gdy model_name wyglada na prawdziwy,
+    krotki model (patrz _looks_like_short_value) - w danych zdarza sie, ze
+    to pole bledne powiela caly tytul, co zablokowaloby wszystkie poprawki."""
     if not text:
         return text, False
     model_name = (model_name or "").strip()
-    if not _looks_like_genuine_model(model_name):
+    if not _looks_like_short_value(model_name):
         model_name = ""
-    if model_name and model_name in text:
-        idx = text.index(model_name)
-        before, after = text[:idx], text[idx + len(model_name):]
+    span = _find_model_span(text, model_name) if model_name else None
+    if span:
+        before, model_actual, after = text[:span[0]], text[span[0]:span[1]], text[span[1]:]
         before_fixed, ch1 = fix_double_spaces_and_grammar(before)
         before_fixed, ch1b = apply_translation_fixes(before_fixed)
         after_fixed, ch2 = fix_double_spaces_and_grammar(after)
         after_fixed, ch2b = apply_translation_fixes(after_fixed)
-        new_text = before_fixed + model_name + after_fixed
+        new_text = before_fixed + model_actual + after_fixed
         return new_text, ch1 or ch1b or ch2 or ch2b
     new_text, ch1 = fix_double_spaces_and_grammar(text)
     new_text, ch2 = apply_translation_fixes(new_text)
@@ -504,8 +584,10 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
     if title_field and new_row.get(title_field):
         text = str(new_row[title_field])
         model_name = str(new_row.get("modelName_text", "") or "")
+        brand_name = str(new_row.get("brandName") or new_row.get("Marke") or "")
+        category_tokens = _category_type_tokens(category_tree, resolved_code)
 
-        text4, changed = strip_title_junk(text, model_name)
+        text4, changed = strip_title_junk(text, model_name, brand_name, category_tokens)
 
         text_translated, ch_translate = apply_title_fixes_excluding_model(text4, model_name)
         text4 = text_translated
