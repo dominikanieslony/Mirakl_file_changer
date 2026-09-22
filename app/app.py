@@ -51,6 +51,13 @@ MAX_STYLED_CELLS = 300_000
 # zeby zmniejszyc obciazenie (czas przetwarzania + pamiec na renderowanie).
 MAX_ROWS_DEFAULT = 2000
 
+# Docelowy budzet komorek (wiersze x kolumny) dla sugerowanego limitu wierszy -
+# zakladka "Poprawione dane" (st.data_editor) renderuje WSZYSTKIE kolumny bez
+# limitu jak podglad z podswietleniem, wiec dla bardzo szerokich plikow nawet
+# nieduza liczba wierszy moze wyczerpac pamiec na Streamlit Cloud i zabic caly
+# proces (bez tracebacku - "Error running app" bez sladu w logach).
+CELL_BUDGET = 500_000
+
 # Kolumny faktycznie analizowane/poprawiane przez rules_engine.py i validator.py
 # (patrz *_CANDIDATES w rules_engine.py, KNOWN_ENUM_TOKENS w dictionaries.py oraz
 # CORE_REQUIRED_FIELDS/GROUP_EXTRA_REQUIRED_FIELDS w field_requirements.py).
@@ -126,17 +133,26 @@ def main():
     st.success(f"Wczytano {len(products)} pozycji produktowych (format: {file_format}).")
 
     total_rows = len(products)
-    if total_rows > MAX_ROWS_DEFAULT:
+    total_cols = len(products[0]) if products else 0
+    # Zakladka "Poprawione dane" (st.data_editor) nie ma zadnego limitu komorek
+    # jak podglad z podswietleniem - dla plikow z duza liczba KOLUMN nawet
+    # umiarkowana liczba wierszy potrafi przeciazyc pamiec na Streamlit Cloud i
+    # zabic caly proces bez tracebacku (obserwowane - "Error running app" bez
+    # sladu w logach). Sugerowany limit wierszy liczymy wiec z budzetu komorek
+    # (wiersze x kolumny), a nie samej liczby wierszy.
+    suggested_max_rows = min(MAX_ROWS_DEFAULT, max(1, CELL_BUDGET // max(total_cols, 1)))
+    if total_rows > suggested_max_rows:
         st.warning(
-            f"Plik zawiera {total_rows} pozycji - przetwarzanie i podglad tak duzej "
-            f"liczby wierszy naraz moze byc wolne lub przeciazyc aplikacje. Ponizej "
-            f"mozesz ograniczyc liczbe przetwarzanych wierszy (np. przetwarzaj plik "
-            f"partiami)."
+            f"Plik zawiera {total_rows} pozycji x {total_cols} kolumn - przetwarzanie "
+            f"i podglad tak duzej ilosci danych naraz moze przeciazyc pamiec aplikacji "
+            f"i spowodowac jej awarie. Ponizej mozesz ograniczyc liczbe przetwarzanych "
+            f"wierszy (np. przetwarzaj plik partiami) - 0 oznacza wszystkie wiersze, "
+            f"ale przy tak duzym pliku moze to zakonczyc sie awaria aplikacji."
         )
     max_rows = st.number_input(
         "Maksymalna liczba wierszy do przetworzenia (0 = wszystkie)",
         min_value=0,
-        value=MAX_ROWS_DEFAULT if total_rows > MAX_ROWS_DEFAULT else 0,
+        value=suggested_max_rows if total_rows > suggested_max_rows else 0,
         step=100,
     )
     if max_rows and max_rows < total_rows:
