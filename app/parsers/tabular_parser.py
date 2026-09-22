@@ -53,7 +53,14 @@ class TabularMeta:
     has_two_row_header: bool = False
     label_row: list | None = None
     code_row: list | None = None
-    other_sheets: dict = field(default_factory=dict)  # sheet_name -> openpyxl worksheet (do kopii)
+    # sheet_name -> lista wierszy (list[list]) do skopiowania 1:1 przy eksporcie.
+    # UWAGA: celowo NIE przechowujemy tu zywych obiektow openpyxl Worksheet -
+    # kazdy z nich trzyma referencje do calego zrodlowego Workbook (`.parent`),
+    # co utrzymywaloby caly oryginalny plik w pamieci przez cala sesje
+    # Streamlit (meta jest w st.session_state) i przy eksporcie podwajaloby
+    # zuzycie pamieci (oryginalny + nowo budowany workbook rownoczesnie) -
+    # obserwowane jako awaria aplikacji z braku pamieci przy pobieraniu pliku.
+    other_sheets: dict = field(default_factory=dict)
 
 
 def _looks_like_code(value) -> bool:
@@ -81,7 +88,11 @@ def _parse_csv(path: str) -> tuple[list[OrderedDict], TabularMeta]:
 
 
 def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
-    wb = openpyxl.load_workbook(path, data_only=True)
+    # read_only=True: openpyxl strumieniuje plik zamiast budowac pelny model
+    # w pamieci - znaczaco mniejsze zuzycie pamieci przy duzych plikach
+    # (jedyny sposob dostepu do arkuszy w kodzie ponizej to iter_rows(), wiec
+    # tryb read-only nie ogranicza niczego, czego faktycznie potrzebujemy).
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     sheet_names = wb.sheetnames
 
     data_sheet_name = None
@@ -93,8 +104,14 @@ def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
         # brak arkusza "Data" -> zakladamy, ze to prosty, jednoarkuszowy plik
         data_sheet_name = sheet_names[0]
 
+    # Materializujemy wartosci arkuszy pomocniczych OD RAZU (jako zwykle listy),
+    # zamiast trzymac zywe obiekty Worksheet - patrz komentarz przy
+    # TabularMeta.other_sheets. Dzieki temu caly `wb` (i lezacy pod nim
+    # oryginalny plik) moze zostac zwolniony z pamieci zaraz po zakonczeniu
+    # tej funkcji, zamiast wisiec w st.session_state.meta przez cala sesje.
     other_sheets = {
-        name: wb[name] for name in sheet_names if name != data_sheet_name
+        name: [list(r) for r in wb[name].iter_rows(values_only=True)]
+        for name in sheet_names if name != data_sheet_name
     }
 
     ws = wb[data_sheet_name]
@@ -168,9 +185,11 @@ def serialize(products: list[OrderedDict], meta: TabularMeta, out_path: str) -> 
         ws.append([row.get(c, "") for c in codes])
 
     # kopiujemy arkusze pomocnicze 1:1, zeby nic nie zgubic z oryginalnego szablonu
-    for name, src_ws in meta.other_sheets.items():
+    # (meta.other_sheets to juz zwykle listy wierszy, nie zywe obiekty Worksheet -
+    # patrz komentarz przy TabularMeta.other_sheets)
+    for name, rows in meta.other_sheets.items():
         dst_ws = wb.create_sheet(name)
-        for r in src_ws.iter_rows(values_only=True):
-            dst_ws.append(list(r))
+        for r in rows:
+            dst_ws.append(r)
 
     wb.save(out_path)
