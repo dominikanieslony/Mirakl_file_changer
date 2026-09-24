@@ -129,3 +129,65 @@ KNOWN_ENUM_TOKENS = {
     },
     "textiles_careInstructions_text": CARE_INSTRUCTION_TOKENS,
 }
+
+
+# --- aliasy naglowkow kolumn: rozpoznany naglowek pliku -> kanoniczny kod ------
+# techniczny (dokladnie ten, ktorego szuka logic/rules_engine.py i
+# field_requirements.py). Niektore eksporty (np. Shopify/Mirakl w wersji
+# "etykiety czytelne dla czlowieka") uzywaja angielskich nazw wyswietlanych
+# zamiast kodow technicznych - bez tej normalizacji ZADNE pole w takim pliku
+# nie zostaloby rozpoznane (process_product()/validate_product() dzialaja
+# wylacznie po kodach technicznych), wiec caly plik przechodzilby przez
+# aplikacje kompletnie nietkniety, bez zadnej poprawki ani walidacji.
+# Zaobserwowane w realnym eksporcie CSV (2026-09-24):
+FIELD_ALIASES = {
+    "Category": "CATEGORY",
+    "Shop SKU": "shop_sku",
+    "Product Name": "ShortDescription_de",
+    "Brand": "brandName",
+    "Long Description": "LongDescription_de",
+    "Manufacturer product type": "manufacturer_product_type_text_de",
+    "Model name": "modelName_text",
+    "Limango Color": "colors",
+    "Manufacturer color designation": "color_manufacturer_text",
+    "Gender": "genders",
+    "Age Group": "ages",
+    "EAN/GTIN": "Std_EAN",
+    "Material Composition": "materialComposition_de",
+    "DE size fashion": "sizes",
+}
+
+
+def canonical_field_name(name: str, existing_keys) -> str:
+    """Zwraca kanoniczny kod techniczny dla rozpoznanego aliasu naglowka
+    (patrz FIELD_ALIASES), o ile taki kanoniczny klucz nie jest juz obecny w
+    existing_keys - zeby nie nadpisac/skolidowac z polem, ktore w pliku juz
+    wystepuje pod wlasciwa nazwa (np. plik ma jednoczesnie "Produktname" i
+    "ShortDescription_de" - to juz jest poprawnie obslugiwane gdzie indziej
+    przez _first_present(), nie ruszamy tego). Bez dopasowania lub przy
+    kolizji zwraca oryginalna nazwe bez zmian."""
+    canonical = FIELD_ALIASES.get(name)
+    if canonical and canonical not in existing_keys:
+        return canonical
+    return name
+
+
+def normalize_headers(codes: list) -> list:
+    """Mapuje liste naglowkow kolumn (w kolejnosci z pliku) na kanoniczne kody
+    techniczne wszedzie tam, gdzie to bezpieczne (patrz canonical_field_name) -
+    pozycja/kolejnosc kolumn jest zachowana, zmienia sie tylko nazwa. Uzywane
+    przez parsers/tabular_parser.py (CSV/XLSX) i parsers/xml_parser.py, zeby
+    reszta aplikacji zawsze widziala wylacznie kody techniczne, niezaleznie od
+    tego, jakiej konwencji nazw kolumn uzywa plik zrodlowy."""
+    original = {c for c in codes if isinstance(c, str)}
+    claimed = set()
+    result = []
+    for c in codes:
+        if isinstance(c, str):
+            canonical = FIELD_ALIASES.get(c)
+            if canonical and canonical not in original and canonical not in claimed:
+                claimed.add(canonical)
+                result.append(canonical)
+                continue
+        result.append(c)
+    return result

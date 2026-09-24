@@ -190,14 +190,20 @@ def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
     if exact.search(title):
         return title, False
 
-    # 2) kolor wystepuje w tytule, ale bez poprawnego 'in'/'im' przed nim
+    # 2) kolor wystepuje w tytule (dokladne slowo), ale bez poprawnego 'in'/'im'
+    # przed nim - usuwamy to wystapienie (wraz z sasiadujaca interpunkcja) i
+    # dopisujemy 'in {kolor}' na koncu, zeby zachowac docelowy format "Typ
+    # (+Model) in Kolor" (kolor ZAWSZE na koncu - jesli tylko wstawimy 'in'
+    # w miejscu, gdzie kolor akurat sie znajduje, a jest to np. pierwsze
+    # slowo tytulu, powstaje bezsensowne 'in Kolor ...' na poczatku).
     present = re.compile(r"[,\-–—]?\s*" + re.escape(color_value) + r"\b", re.IGNORECASE)
     m = present.search(title)
     if m:
-        color_start = m.end() - len(color_value)
-        original_color = title[color_start:m.end()]
-        new_title = title[:m.start()] + " in " + original_color + title[m.end():]
-        new_title = re.sub(r"\s{2,}", " ", new_title).strip()
+        remainder = title[:m.start()] + title[m.end():]
+        remainder = re.sub(r"^[\s\-:,]+", "", remainder)
+        remainder = re.sub(r"[\s\-:,]+$", "", remainder)
+        remainder = re.sub(r"\s{2,}", " ", remainder).strip()
+        new_title = f"{remainder} in {color_value}" if remainder else f"in {color_value}"
         return new_title, new_title != title
 
     # 3) tytul ma 'in X'/'im X' z innym kolorem - podmien X na color_value

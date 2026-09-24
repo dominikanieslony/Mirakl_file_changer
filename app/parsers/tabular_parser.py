@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 import openpyxl
 import pandas as pd
 
+from logic import dictionaries as D
+
 AUX_SHEET_NAMES = {"referencedata", "columns", "error details", "errordetails"}
 
 
@@ -81,7 +83,10 @@ def parse(path: str) -> tuple[list[OrderedDict], TabularMeta]:
 
 def _parse_csv(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
-    codes = list(df.columns)
+    # Mapujemy rozpoznane aliasy naglowkow (np. angielskie etykiety
+    # wyswietlane) na kanoniczne kody techniczne - patrz
+    # dictionaries.normalize_headers() i komentarz w _parse_xlsx.
+    codes = D.normalize_headers(list(df.columns))
     products = [OrderedDict(zip(codes, row)) for row in df.itertuples(index=False, name=None)]
     meta = TabularMeta(file_format="csv", has_two_row_header=False, code_row=codes)
     return products, meta
@@ -140,6 +145,13 @@ def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
         code_row = row1
         data_rows = list(rows_iter) if row2 is None else [row2] + list(rows_iter)
 
+    # Mapujemy rozpoznane aliasy naglowkow (np. angielskie etykiety
+    # wyswietlane z eksportow Shopify/Mirakl) na kanoniczne kody techniczne
+    # PRZED zbudowaniem wierszy - patrz dictionaries.normalize_headers().
+    # code_row normalizujemy tez tutaj (nie tylko `codes`), zeby
+    # TabularMeta.code_row (uzywane przy eksporcie w serialize()) zostalo
+    # spojne z kluczami faktycznie obecnymi w produktach.
+    code_row = D.normalize_headers(code_row)
     codes = [c if c is not None else f"col_{i}" for i, c in enumerate(code_row)]
     products = []
     for r in data_rows:

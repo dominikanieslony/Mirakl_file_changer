@@ -18,6 +18,8 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
 
+from logic import dictionaries as D
+
 NS = {
     "xsi": "http://www.w3.org/2001/XMLSchema-instance",
     "xsd": "http://www.w3.org/2001/XMLSchema",
@@ -42,6 +44,10 @@ def parse(path: str) -> list[OrderedDict]:
             code = code_el.text if code_el is not None else None
             value = value_el.text if value_el is not None else None
             if code is not None:
+                # mapuje rozpoznany alias naglowka (patrz dictionaries.FIELD_ALIASES)
+                # na kanoniczny kod techniczny, o ile bezpieczne (nie koliduje z
+                # juz obecnym kluczem w tym produkcie)
+                code = D.canonical_field_name(code, row)
                 row[code] = value if value is not None else ""
         products.append(row)
     return products
