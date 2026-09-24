@@ -92,6 +92,19 @@ def _parse_csv(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     return products, meta
 
 
+def parse_txt(path: str) -> tuple[list[OrderedDict], TabularMeta]:
+    """Parser dla .txt zawierajacego dane tabelaryczne (nie XML - to sprawdza
+    juz loader.py przed wywolaniem tej funkcji). Separator jest automatycznie
+    wykrywany (przecinek/tabulator/srednik...) - w przeciwienstwie do
+    _parse_csv(), ktora zaklada przecinek (format .csv jest bardziej
+    przewidywalny, .txt bywa eksportowany z roznymi separatorami)."""
+    df = pd.read_csv(path, dtype=str, keep_default_na=False, sep=None, engine="python")
+    codes = D.normalize_headers(list(df.columns))
+    products = [OrderedDict(zip(codes, row)) for row in df.itertuples(index=False, name=None)]
+    meta = TabularMeta(file_format="csv", has_two_row_header=False, code_row=codes)
+    return products, meta
+
+
 def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     # read_only=True: openpyxl strumieniuje plik zamiast budowac pelny model
     # w pamieci - znaczaco mniejsze zuzycie pamieci przy duzych plikach

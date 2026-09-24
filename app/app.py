@@ -114,7 +114,7 @@ def main():
         "podstawie all_categories.json."
     )
 
-    uploaded = st.file_uploader("Plik z danymi produktow", type=["xml", "csv", "xlsx", "xls"])
+    uploaded = st.file_uploader("Plik z danymi produktow", type=["xml", "csv", "xlsx", "xls", "txt"])
     if uploaded is None:
         st.info("Wgraj plik, aby rozpoczac.")
         return
