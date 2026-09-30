@@ -42,6 +42,33 @@ TITLE_GENDER_WORDS = {
     "mädchen", "jungen", "junge", "baby", "damen", "herren", "kinder", "unisex",
 }
 
+# kody rozmiarow, ktore nie powinny wystepowac w tytule (rozmiar to osobna
+# koncepcja niz "Typ produktu + Model + in Kolor" - potwierdzone przez
+# uzytkownika: "wszystkie rozmiary [...] powinny byc zawsze usuwane z tytulu").
+# Dopasowywane jako cale slowo, wielkosc liter ma znaczenie (male "s"/"m"/"l"
+# to zwykle zwykle slowa, nie kody rozmiaru).
+TITLE_SIZE_TOKENS = {"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL"}
+
+VARIANT_GROUP_CANDIDATES = ["variant_group_code", "Variant Group"]
+
+# separator miedzy ogolnym okresleniem koloru a motywem w color_manufacturer_text
+# (zaobserwowane: "Mehrfarbig - Tropischer Dschungel"). Celowo bez "/" -
+# "Rot/Blau" to dwa kolory, nie prefiks + motyw.
+_COLOR_PREFIX_SEPARATOR_RE = re.compile(r"\s+[-–—]\s+|\s*:\s+")
+
+# ogolne okreslenia "wielokolorowy" - fallback dla produktow bez grupy
+# wariantow (patrz variant_group_color_prefixes)
+MULTICOLOR_WORDS = {"mehrfarbig", "bunt", "farbig", "multicolor", "multicolored",
+                    "multi-colored", "colorful"}
+
+# stare wymiary na koncu tytulu (np. "- 9,8 x 14,5 cm") - zastepowane
+# sufiksem z build_dimension_suffix, gdy pola wymiarow sa kompletne
+_OLD_DIMENSIONS_RE = re.compile(
+    r"\s*[-–—]?\s*\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?"
+    r"(?:\s*[x×]\s*\d+(?:[.,]\d+)?)?\s*(?:mm|cm|m)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _first_present(row: dict, candidates: list[str]) -> str | None:
     for c in candidates:
@@ -84,7 +111,11 @@ def fix_double_spaces_and_grammar(text: str) -> tuple[str, bool]:
     if "  " in new_text:
         new_text = re.sub(r"\s{2,}", " ", new_text).strip()
         changed = True
-    # " im " przed kolorem powinno byc " in " zgodnie ze wzorcem "Typ (+Model) in Farbe"
+    # " im " przed kolorem powinno byc " in " zgodnie ze wzorcem "Typ (+Model) in Farbe".
+    # Gdy tytul ma juz 'in' (np. "im Querformat in Oldtimer"), 'im' jest
+    # zwyklym przyimkiem, nie wstepem do koloru - zostawiamy.
+    if re.search(r"\bin\b", new_text):
+        return new_text, changed
     fixed = re.sub(r"\bim\b(?=\s+[A-ZÄÖÜ])", "in", new_text)
     if fixed != new_text:
         new_text = fixed
@@ -170,6 +201,64 @@ def apply_translation_fixes(text: str) -> tuple[str, bool]:
     return new_text, changed_any
 
 
+def extract_color_from_description(desc: str) -> str | None:
+    """Fallback dla brakujacego color_manufacturer_text: niektore pliki nie
+    maja tego pola w ogole (zaobserwowane), ale Long Description zawiera
+    jawnie oznaczona wzmianke 'Farbe: X' - to jedyne bezpieczne (nie
+    zgadywane) zrodlo koloru z wolnego tekstu, bo jest jednoznacznie
+    oznaczone etykieta, w przeciwienstwie do prob rozpoznawania
+    dowolnych slow-kolorow w tytule (brak niezawodnego slownika do tego)."""
+    if not desc:
+        return None
+    m = re.search(r"Farbe\s*:\s*([^.<\n]+)", desc, re.IGNORECASE)
+    if not m:
+        return None
+    color = re.sub(r"\s{2,}", " ", m.group(1)).strip()
+    if not color:
+        return None
+    return _format_extracted_color(color)
+
+
+def _format_extracted_color(color: str) -> str:
+    """Formatuje kolor wyekstrahowany z opisu (patrz extract_color_from_description):
+    kazde slowo-kolor z wielkiej litery, a przy wielu kolorach oddzielone '/'
+    (potwierdzone przez uzytkownika, np. 'Rot/Gelb') - niezaleznie od tego, czy
+    w oryginalnym opisie byly rozdzielone spacja, '/', przecinkiem czy 'und'.
+    Dotyczy WYLACZNIE tego fallbacku - color_manufacturer_text jest zawsze
+    uzywane bez zmian, verbatim."""
+    parts = re.split(r"[/,&]+|\s+und\s+|\s+", color, flags=re.IGNORECASE)
+    parts = [p[:1].upper() + p[1:] for p in (p.strip() for p in parts) if p]
+    return "/".join(parts)
+
+
+def _strip_bare_color_word_fragments(text: str, color_value: str) -> tuple[str, bool]:
+    """Gdy kolor pochodzi z fallbacku (wyekstrahowany z opisu - patrz
+    extract_color_from_description), moze on juz wystepowac w tytule w innej
+    formie interpunkcyjnej (np. tytul ma 'hellblau weiss', a z opisu
+    wyekstrahowano 'hellblau/weiss') - dokladne dopasowanie calej frazy w
+    ensure_in_before_color by tego nie wykrylo, co prowadziloby do
+    zdublowania koloru. Usuwamy pojedyncze slowa-skladowe koloru (>=3 znaki,
+    zeby pominac szum typu spojniki) wystepujace w tytule jako cale slowa."""
+    if not text or not color_value:
+        return text, False
+    words = [w for w in re.split(r"[^A-Za-zÀ-ÖØ-öø-ÿ]+", color_value) if len(w) >= 3]
+    if not words:
+        return text, False
+    new_text = text
+    changed = False
+    for w in words:
+        pattern = re.compile(rf"\b{re.escape(w)}\b", re.IGNORECASE)
+        if pattern.search(new_text):
+            new_text = pattern.sub("", new_text)
+            changed = True
+    if not changed:
+        return text, False
+    new_text = re.sub(r"^[\s\-:,/]+", "", new_text)
+    new_text = re.sub(r"[\s\-:,/]+$", "", new_text)
+    new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
 def ensure_in_before_color(title: str, color_value: str) -> tuple[str, bool]:
     """Wymusza wzorzec tytulu '... in {color_manufacturer_text}' (color_manufacturer_text
     jest zrodlem prawdy dla koloru w tytule - zawsze, bez wyjatkow, potwierdzone
@@ -236,6 +325,34 @@ def _strip_gender_words(text: str) -> tuple[str, bool]:
         return text, False
     # sprzataj slady po usunieciu (osierocone laczniki/dwukropki/przecinki na
     # brzegach, nadmiarowe spacje)
+    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
+    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
+def _strip_size_tokens(text: str) -> tuple[str, bool]:
+    """Usuwa z tytulu wzmianki o rozmiarze - literowe kody (TITLE_SIZE_TOKENS:
+    S/M/L/XL/...) oraz zakresy liczbowe (np. '158-170', typowe dla rozmiarow
+    ciala dzieci) - rozmiar nie jest czescia formatu 'Typ + Model + in Kolor'."""
+    if not text:
+        return text, False
+    new_text = text
+    changed = False
+
+    range_pattern = re.compile(r"\b\d{2,3}\s*[-–—]\s*\d{2,3}\b")
+    if range_pattern.search(new_text):
+        new_text = range_pattern.sub("", new_text)
+        changed = True
+
+    for token in TITLE_SIZE_TOKENS:
+        pattern = re.compile(rf"\b{re.escape(token)}\b")
+        if pattern.search(new_text):
+            new_text = pattern.sub("", new_text)
+            changed = True
+
+    if not changed:
+        return text, False
     new_text = re.sub(r"^[\s\-:,]+", "", new_text)
     new_text = re.sub(r"[\s\-:,]+$", "", new_text)
     new_text = re.sub(r"\s{2,}", " ", new_text).strip()
@@ -362,8 +479,9 @@ def strip_title_junk(
     def _clean_segment(segment: str) -> tuple[str, bool]:
         t, ch1 = _strip_gender_words(segment)
         t, ch2 = _strip_brand_name(t, brand_name)
-        t, ch3 = _strip_trailing_mit_clause(t)
-        return t, ch1 or ch2 or ch3
+        t, ch3 = _strip_size_tokens(t)
+        t, ch4 = _strip_trailing_mit_clause(t)
+        return t, ch1 or ch2 or ch3 or ch4
 
     span = _find_model_span(title, model_name) if model_name else None
     if span:
@@ -517,9 +635,256 @@ def build_dimension_suffix(row: dict) -> str | None:
     return f"(B){width} x (H){height} x (T){depth} {unit}"
 
 
+def _strip_old_dimensions(text: str) -> tuple[str, bool]:
+    if not text:
+        return text, False
+    new_text = _OLD_DIMENSIONS_RE.sub("", text).rstrip()
+    if not new_text:
+        return text, False
+    return new_text, new_text != text
+
+
+def _strip_word(text: str, word: str) -> tuple[str, bool]:
+    if not text or not word:
+        return text, False
+    pattern = re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)
+    if not pattern.search(text):
+        return text, False
+    new_text = pattern.sub("", text)
+    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
+    new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
+# --- ReferenceData (arkusz szablonu Mirakl z dozwolonymi wartosciami) ------------
+
+def reference_values_from_rows(rows: list) -> dict[str, set[str]]:
+    """Arkusz ReferenceData: wiersz 1 = kody pol, kolumny = dozwolone wartosci.
+    Rozne szablony maja rozne wartosci dla tego samego pola (np. colors:
+    'bunt'/'schwarz' w jednym, 'black' w innym), wiec to ten arkusz - a nie
+    stale slowniki - jest zrodlem prawdy, gdy plik go ma."""
+    if not rows:
+        return {}
+    header = rows[0]
+    result: dict[str, set[str]] = {}
+    for j, code in enumerate(header):
+        if not isinstance(code, str) or not code.strip():
+            continue
+        values = {str(r[j]).strip() for r in rows[1:]
+                  if r is not None and j < len(r) and r[j] is not None and str(r[j]).strip()}
+        if values:
+            result[code.strip()] = values
+    return result
+
+
+# pola z ReferenceData, ktorych NIE walidujemy ta sciezka - kategoria ma
+# wlasna logike (resolve + sugestie) w process_product
+_REFERENCE_SKIP_FIELDS = {"CATEGORY"}
+
+
+def check_reference_value(field_code: str, value: str, allowed: set[str]) -> str | None:
+    """Zwraca komunikat bledu albo None. Wartosci wielokrotne rozdzielone '|'
+    albo przecinkiem (zaobserwowane w LI_Softshell: 'Fahrrad, Funsport, Laufen');
+    przecinek probujemy dopiero, gdy caly token nie jest dozwolony - niektore
+    dozwolone wartosci same zawieraja przecinek ('230 V AC, 50 Hz'). Przy
+    liscie z przecinkami raportujemy tylko niedozwolone elementy."""
+    tokens = [t.strip() for t in str(value).split("|") if t.strip()]
+    lower_map = {a.lower(): a for a in allowed}
+    problems = []
+    for t in tokens:
+        if t in allowed:
+            continue
+        # caly token niedozwolony - moze to lista rozdzielona przecinkami
+        parts = [p.strip() for p in t.split(",") if p.strip()]
+        if len(parts) < 2 or not any(p in allowed or p.lower() in lower_map for p in parts):
+            parts = [t]
+        for part in parts:
+            if part in allowed:
+                continue
+            proper = lower_map.get(part.lower())
+            if proper:
+                problems.append(f"'{part}' -> powinno byc '{proper}' (wielkosc liter)")
+            else:
+                problems.append(f"'{part}' nie wystepuje w ReferenceData")
+    if not problems:
+        return None
+    hint = ""
+    if len(allowed) <= 40:
+        hint = f" Dozwolone: {sorted(allowed)}."
+    return f"Pole {field_code}: " + "; ".join(problems) + "." + hint
+
+
+# --- grupy wariantow ---------------------------------------------------------------
+
+def _concrete_color_words(reference_values: dict | None) -> set[str]:
+    words = set(D.COLORS_VALID_CODES) | {k.lower() for k in D.COLORS_EN_TO_DE} | \
+        {v.lower() for v in D.COLORS_EN_TO_DE.values()}
+    if reference_values and "colors" in reference_values:
+        words |= {v.lower() for v in reference_values["colors"]}
+    return words - MULTICOLOR_WORDS
+
+
+def _split_color_prefix(value: str) -> tuple[str, str] | None:
+    """'Mehrfarbig - Flamingo' -> ('Mehrfarbig - ', 'Flamingo'); bez separatora -> None."""
+    m = _COLOR_PREFIX_SEPARATOR_RE.search(value or "")
+    if not m or not value[:m.start()].strip() or not value[m.end():].strip():
+        return None
+    return value[:m.end()], value[m.end():]
+
+
+def variant_group_color_prefixes(products: list, reference_values: dict | None = None) -> list[str | None]:
+    """Dla kazdego produktu zwraca prefiks color_manufacturer_text do usuniecia
+    (np. 'Mehrfarbig - ') albo None.
+
+    Glowna regula (potwierdzona przez uzytkownika): w grupie wariantow kolor
+    producenta ma ROZROZNIAC produkty. Gdy wszystkie produkty grupy maja kolor
+    w postaci '<wspolny prefiks><separator><motyw>' i motywy sie roznia, to
+    wspolny prefiks niczego nie rozroznia - usuwamy go, zostaje sam motyw.
+    Nie ruszamy grup, w ktorych prefiks to konkretny kolor (np.
+    'Schwarz - Weiß' / 'Schwarz - Rot' to kolory dwubarwne, nie motywy).
+
+    Fallback dla produktow, ktorych nie obejmuje regula grupy (brak grupy,
+    grupa jednoelementowa, identyczne kolory w grupie): prefiks usuwany tylko,
+    gdy jest znanym okresleniem wielokolorowosci (MULTICOLOR_WORDS)."""
+    color_field = None
+    group_field = None
+    if products:
+        color_field = _first_present(products[0], COLOR_MANUFACTURER_CANDIDATES)
+        group_field = _first_present(products[0], VARIANT_GROUP_CANDIDATES)
+    result: list[str | None] = [None] * len(products)
+    if not color_field:
+        return result
+
+    concrete = _concrete_color_words(reference_values)
+    groups: dict[str, list[int]] = {}
+    if group_field:
+        for i, row in enumerate(products):
+            g = str(row.get(group_field) or "").strip()
+            if g:
+                groups.setdefault(g, []).append(i)
+
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        splits = [_split_color_prefix(str(products[i].get(color_field) or "")) for i in idxs]
+        if any(s is None for s in splits):
+            continue
+        prefixes = {s[0] for s in splits}
+        motifs = {s[1].strip() for s in splits}
+        if len(prefixes) != 1 or len(motifs) < 2:
+            continue
+        prefix = prefixes.pop()
+        prefix_word = _COLOR_PREFIX_SEPARATOR_RE.sub("", prefix).strip().lower()
+        if prefix_word in concrete:
+            continue
+        for i in idxs:
+            result[i] = prefix
+
+    for i, row in enumerate(products):
+        if result[i] is not None:
+            continue
+        split = _split_color_prefix(str(row.get(color_field) or ""))
+        if split and _COLOR_PREFIX_SEPARATOR_RE.sub("", split[0]).strip().lower() in MULTICOLOR_WORDS:
+            result[i] = split[0]
+    return result
+
+
+def harmonize_variant_group_titles(products: list, motif_rows: list[bool]) -> dict[int, list[dict]]:
+    """Po przetworzeniu wierszy: w grupie wariantow tytuly powinny miec wspolny
+    rdzen ('<rdzen> in <kolor>') i roznic sie tylko kolorem/motywem
+    (potwierdzone przez uzytkownika - dopiski typu '6-sprachig', 'Vintage
+    Poster', 'aus Recyclingpapier' wystepujace tylko w czesci wariantow sa
+    usuwane). Rdzen = wspolny poczatek (cale slowa) rdzeni wszystkich
+    wariantow. Dotyczy TYLKO grup, w ktorych kolor producenta to motyw
+    (motif_rows - wszystkie wiersze grupy mialy usuniety prefiks koloru, patrz
+    variant_group_color_prefixes). W innych grupach rdzen bywa nazwa wlasna
+    wariantu (np. 'Babydecke "Sanftes Rosenholz" in Rosa') i nie wolno go
+    obcinac. Modyfikuje products w miejscu, zwraca {indeks: [issue]}."""
+    issues: dict[int, list[dict]] = {}
+    if not products:
+        return issues
+    title_field = _first_present(products[0], TITLE_CODE_CANDIDATES)
+    color_field = _first_present(products[0], COLOR_MANUFACTURER_CANDIDATES)
+    group_field = _first_present(products[0], VARIANT_GROUP_CANDIDATES)
+    if not (title_field and color_field and group_field):
+        return issues
+
+    groups: dict[str, list[int]] = {}
+    for i, row in enumerate(products):
+        g = str(row.get(group_field) or "").strip()
+        if g:
+            groups.setdefault(g, []).append(i)
+
+    for idxs in groups.values():
+        if len(idxs) < 2 or not all(motif_rows[i] for i in idxs):
+            continue
+        parts = []
+        for i in idxs:
+            title = str(products[i].get(title_field) or "")
+            color = str(products[i].get(color_field) or "").strip()
+            pos = title.rfind(f" in {color}") if color else -1
+            if pos <= 0:
+                parts = None
+                break
+            parts.append((i, title, title[:pos], title[pos:]))
+        if not parts:
+            continue
+        # ujednolicamy tylko, gdy sama czesc 'in <kolor>...' rozroznia warianty -
+        # jesli dwa rozne tytuly mialyby ten sam kolor (np. "Babydecke "Sanftes
+        # Rosenholz" in Rosa" i "Babydecke "geruhsamer Rosentau" in Rosa"), to
+        # rdzen niesie informacje rozrozniajaca i nie wolno go obcinac
+        if len({p[3] for p in parts}) < len({p[1] for p in parts}):
+            continue
+        cores = [p[2].split() for p in parts]
+        if all(c == cores[0] for c in cores):
+            continue
+        common = []
+        for words in zip(*cores):
+            if len(set(words)) != 1:
+                break
+            common.append(words[0])
+        if not any(re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]{3,}", w) for w in common):
+            for i, title, _, _ in parts:
+                issues.setdefault(i, []).append(issue(
+                    title_field, "TITLE_GROUP_INCONSISTENT",
+                    f"Tytuly w grupie wariantow nie maja wspolnego rdzenia ('{title}') - "
+                    f"do recznej weryfikacji.", "manual_review"))
+            continue
+        common_core = " ".join(common)
+        for i, title, core, rest in parts:
+            if core.split() == common:
+                continue
+            new_title = common_core + rest
+            products[i][title_field] = new_title
+            removed = " ".join(core.split()[len(common):])
+            issues.setdefault(i, []).append(issue(
+                title_field, "TITLE_GROUP_HARMONIZED",
+                f"Ujednolicono tytul z grupa wariantow (usunieto '{removed}'): "
+                f"'{title}' -> '{new_title}'.", "auto_fixed"))
+    return issues
+
+
+def process_products(products: list, category_tree: CategoryTree,
+                     reference_values: dict | None = None) -> list[tuple[OrderedDict, list[dict]]]:
+    """Przetwarza caly plik: reguly wymagajace widoku grupy wariantow (prefiks
+    koloru, spojnosc tytulow) + process_product dla kazdego wiersza."""
+    prefixes = variant_group_color_prefixes(products, reference_values)
+    results = [process_product(row, category_tree, color_prefix=prefixes[i],
+                               reference_values=reference_values)
+               for i, row in enumerate(products)]
+    group_issues = harmonize_variant_group_titles([r[0] for r in results],
+                                                  [p is not None for p in prefixes])
+    for i, extra in group_issues.items():
+        results[i][1].extend(extra)
+    return results
+
+
 # --- glowna funkcja per-produkt --------------------------------------------------
 
-def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[OrderedDict, list[dict]]:
+def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix: str | None = None,
+                    reference_values: dict | None = None) -> tuple[OrderedDict, list[dict]]:
+    """color_prefix - patrz variant_group_color_prefixes; reference_values -
+    patrz reference_values_from_rows (None = plik bez arkusza ReferenceData)."""
     new_row = OrderedDict(row)
     issues: list[dict] = []
 
@@ -582,6 +947,19 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
             new_row[color_field] = new_val
             issues.append(issue(color_field, "COLOR_LANGUAGE_FIXED", note, "auto_fixed"))
 
+    # --- kolor producenta: usuniecie wspolnego prefiksu grupy wariantow
+    # ("Mehrfarbig - Flamingo" -> "Flamingo"), patrz variant_group_color_prefixes -
+    prefix_word = None
+    if color_prefix and color_field and str(new_row.get(color_field) or "").startswith(color_prefix):
+        old_val = str(new_row[color_field])
+        motif = old_val[len(color_prefix):].strip()
+        new_row[color_field] = motif
+        prefix_word = _COLOR_PREFIX_SEPARATOR_RE.sub("", color_prefix).strip()
+        issues.append(issue(color_field, "COLOR_PREFIX_REMOVED",
+                             f"Usunieto wspolny prefiks '{prefix_word}' z koloru producenta: "
+                             f"'{old_val}' -> '{motif}' (motyw rozroznia warianty).",
+                             "auto_fixed"))
+
     # --- tytul: docelowy format "Typ produktu + Model + in Kolor" (zalozenie
     # 1d w README.md) - usuwamy smieci (plec, stary opis wzoru dublujacy
     # kolor), naprawiamy jezyk/formatowanie, upewniamy sie ze model i kolor sa
@@ -590,10 +968,32 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
     if title_field and new_row.get(title_field):
         text = str(new_row[title_field])
         model_name = str(new_row.get("modelName_text", "") or "")
+        sku_value = str(new_row.get("shop_sku") or new_row.get("Shop SKU") or "")
+        if model_name.strip() and model_name.strip() == sku_value.strip():
+            # modelName_text bywa (zaobserwowane) uzywane jako wewnetrzny kod
+            # artykulu identyczny z shop_sku, a nie prawdziwa nazwa modelu
+            # (np. "BV6741-412-XL") - nie doklejamy takiego kodu do tytulu.
+            model_name = ""
+        if prefix_word:
+            # kolor to motyw wariantu (np. "Flamingo") - pelni role modelu,
+            # a modelName_text bywa wtedy ta sama wartoscia albo angielskim
+            # odpowiednikiem ("Cat" vs "Katze") - nie wstawiamy go osobno
+            model_name = ""
         brand_name = str(new_row.get("brandName") or new_row.get("Marke") or "")
         category_tokens = _category_type_tokens(category_tree, resolved_code)
 
-        text4, changed = strip_title_junk(text, model_name, brand_name, category_tokens)
+        dim_suffix = build_dimension_suffix(new_row)
+        base = text
+        pre_changed = False
+        if dim_suffix:
+            base, ch_dims = _strip_old_dimensions(base)
+            pre_changed = pre_changed or ch_dims
+        if prefix_word:
+            base, ch_prefix = _strip_word(base, prefix_word)
+            pre_changed = pre_changed or ch_prefix
+
+        text4, changed = strip_title_junk(base, model_name, brand_name, category_tokens)
+        changed = changed or pre_changed
 
         text_translated, ch_translate = apply_title_fixes_excluding_model(text4, model_name)
         text4 = text_translated
@@ -606,6 +1006,17 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
         # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
         # color_manufacturer_text, juz po ew. tlumaczeniu powyzej)
         color_value = str(new_row.get(color_field, "") or "") if color_field else ""
+        if not color_value:
+            # brak color_manufacturer_text w ogole (nie tylko puste, ale pole
+            # nie istnieje w pliku) - probujemy jawnie oznaczonej wzmianki
+            # "Farbe: X" w Long Description, patrz extract_color_from_description
+            desc_field_fallback = _first_present(new_row, DESC_CODE_CANDIDATES)
+            desc_for_color = str(new_row.get(desc_field_fallback, "") or "") if desc_field_fallback else ""
+            extracted = extract_color_from_description(desc_for_color)
+            if extracted:
+                color_value = extracted
+                text4, ch_color_cleanup = _strip_bare_color_word_fragments(text4, color_value)
+                changed = changed or ch_color_cleanup
         text5, changed_in = ensure_in_before_color(text4, color_value)
         if changed_in:
             text4 = text5
@@ -623,7 +1034,6 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
 
         # Wymiary w tytule (onesize/hardgoods): wzorzec "... – (B)W x (H)H x (T)D cm"
         # potwierdzony przykladem "Wandspiegel 3039 in Walnuss – (B)46 x (H)46 x (T)6 cm"
-        dim_suffix = build_dimension_suffix(new_row)
         has_dim_in_title = bool(re.search(r"\(B\)|\(H\)|\(T\)", text4))
         if dim_suffix and not has_dim_in_title:
             new_title = f"{text4} – {dim_suffix}"
@@ -652,22 +1062,32 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
             new_row[mat_field] = new_val
             issues.append(issue(mat_field, "MATERIAL_FORMAT_FIXED", note, "auto_fixed"))
 
+    # --- pola ze slownikiem w arkuszu ReferenceData: walidacja wzgledem niego
+    # (zastepuje stale slowniki ponizej dla tych pol) ------------------------------
+    reference_values = reference_values or {}
+    for field_code, allowed in reference_values.items():
+        if field_code in _REFERENCE_SKIP_FIELDS or not new_row.get(field_code):
+            continue
+        note = check_reference_value(field_code, str(new_row[field_code]), allowed)
+        if note:
+            issues.append(issue(field_code, "REFERENCE_VALUE_INVALID", note, "manual_review"))
+
     # --- genders / ages: tylko flagowanie (bez auto-tlumaczenia - poza zakresem) -
     gender_field = _first_present(new_row, GENDER_CODE_CANDIDATES)
-    if gender_field and new_row.get(gender_field):
+    if gender_field and gender_field not in reference_values and new_row.get(gender_field):
         _, _, note = normalize_gender(str(new_row[gender_field]))
         if note:
             issues.append(issue(gender_field, "GENDER_UNKNOWN_VALUE", note, "manual_review"))
 
     age_field = _first_present(new_row, AGE_CODE_CANDIDATES)
-    if age_field and new_row.get(age_field):
+    if age_field and age_field not in reference_values and new_row.get(age_field):
         _, _, note = normalize_age(str(new_row[age_field]))
         if note:
             issues.append(issue(age_field, "AGE_UNKNOWN_VALUE", note, "manual_review"))
 
     # --- colors: sprawdzenie wzgledem zamknietego slownika kodow -----------------
     colors_field = _first_present(new_row, COLORS_FIELD_CANDIDATES)
-    if colors_field and new_row.get(colors_field):
+    if colors_field and colors_field not in reference_values and new_row.get(colors_field):
         _, _, note = normalize_colors_field(str(new_row[colors_field]))
         if note:
             issues.append(issue(colors_field, "COLOR_CODE_INVALID", note, "manual_review"))
@@ -678,8 +1098,11 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
         model_val = str(new_row[model_field])
         size_val = str(new_row.get("sizes", "") or "")
         color_val = str(new_row.get(color_field, "") if color_field else "")
-        if (size_val and size_val.lower() in model_val.lower()) or \
-           (color_val and color_val.lower() in model_val.lower() and len(color_val) > 2):
+        # przy kolorze-motywie (patrz variant_group_color_prefixes) model rowny
+        # kolorowi jest oczekiwany, a nie zanieczyszczeniem
+        color_in_model = (not prefix_word and color_val
+                          and color_val.lower() in model_val.lower() and len(color_val) > 2)
+        if (size_val and size_val.lower() in model_val.lower()) or color_in_model:
             issues.append(issue(model_field, "MODEL_NAME_POLLUTED",
                                  f"Pole modelu '{model_val}' zdaje sie zawierac kolor/rozmiar - do recznej weryfikacji.",
                                  "manual_review"))
@@ -695,6 +1118,8 @@ def process_product(row: OrderedDict, category_tree: CategoryTree) -> tuple[Orde
 
     # --- pola enumeracyjne: sprawdzenie wzgledem znanych tokenow -----------------
     for field_code, allowed in D.KNOWN_ENUM_TOKENS.items():
+        if field_code in reference_values:
+            continue
         if field_code in new_row and new_row.get(field_code):
             raw = str(new_row[field_code])
             tokens = [t.strip() for t in raw.split("|") if t.strip()]

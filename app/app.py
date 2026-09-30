@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from logic.categories import CategoryTree
-from logic.rules_engine import process_product
+from logic.rules_engine import process_products, reference_values_from_rows
 from logic.validator import validate_product
 from logic.table_utils import (
     FLAG_COLUMN,
@@ -88,11 +88,21 @@ def get_category_tree() -> CategoryTree:
     return CategoryTree.load(CATEGORIES_PATH)
 
 
-def run_pipeline(products, category_tree):
+def _reference_values(meta):
+    """Dozwolone wartosci z arkusza ReferenceData szablonu (tylko XLSX) - patrz
+    rules_engine.reference_values_from_rows."""
+    other_sheets = getattr(meta, "other_sheets", None) or {}
+    for name, rows in other_sheets.items():
+        if name.strip().lower() == "referencedata":
+            return reference_values_from_rows(rows)
+    return None
+
+
+def run_pipeline(products, category_tree, meta=None):
     corrected = []
     all_issues = []
-    for idx, row in enumerate(products):
-        fixed_row, issues = process_product(row, category_tree)
+    results = process_products(products, category_tree, _reference_values(meta))
+    for idx, (fixed_row, issues) in enumerate(results):
         val_issues = validate_product(fixed_row, category_tree)
         issues = issues + val_issues
         sku = fixed_row.get("shop_sku") or fixed_row.get("Shop SKU") or f"wiersz_{idx+1}"
@@ -165,7 +175,7 @@ def main():
     if st.button("Przetworz i popraw dane", type="primary"):
         category_tree = get_category_tree()
         with st.spinner("Analizuje i poprawiam dane..."):
-            corrected, all_issues = run_pipeline(products, category_tree)
+            corrected, all_issues = run_pipeline(products, category_tree, meta)
         st.session_state.corrected_products = corrected
         st.session_state.issues = all_issues
         st.session_state.file_format = file_format

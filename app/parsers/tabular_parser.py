@@ -63,6 +63,12 @@ class TabularMeta:
     # zuzycie pamieci (oryginalny + nowo budowany workbook rownoczesnie) -
     # obserwowane jako awaria aplikacji z braku pamieci przy pobieraniu pliku.
     other_sheets: dict = field(default_factory=dict)
+    # komorki (indeks_wiersza_danych, kod_kolumny), ktore w zrodlowym XLSX byly
+    # liczbami - przy eksporcie zapisujemy je z powrotem jako liczby (inaczej
+    # EAN, wymiary, waga itd. trafiaja do pliku jako tekst - patrz
+    # _cell_to_str). Per komorka, bo kolumny bywaja mieszane (EAN czesciowo
+    # jako tekst, czesciowo jako liczba - zaobserwowane w LI_Softshell).
+    numeric_cells: set = field(default_factory=set)
 
 
 def _looks_like_code(value) -> bool:
@@ -167,12 +173,15 @@ def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     code_row = D.normalize_headers(code_row)
     codes = [c if c is not None else f"col_{i}" for i, c in enumerate(code_row)]
     products = []
+    numeric_cells = set()
     for r in data_rows:
         if r is None or all(v is None for v in r):
             continue
         row = OrderedDict()
         for i, code in enumerate(codes):
             val = r[i] if i < len(r) else None
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                numeric_cells.add((len(products), code))
             row[code] = _cell_to_str(val)
         products.append(row)
 
@@ -183,8 +192,22 @@ def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
         label_row=label_row,
         code_row=code_row,
         other_sheets=other_sheets,
+        numeric_cells=numeric_cells,
     )
     return products, meta
+
+
+def _to_number_if_numeric(value, was_numeric: bool):
+    """Odwrotnosc _cell_to_str dla kolumn liczbowych w zrodle. Wartosci z
+    zerem wiodacym (np. kod '0123') zostaja tekstem, zeby go nie zgubic."""
+    if not was_numeric or not isinstance(value, str):
+        return value
+    v = value.strip()
+    if re.fullmatch(r"-?(0|[1-9]\d*)", v):
+        return int(v)
+    if re.fullmatch(r"-?(0|[1-9]\d*)\.\d+", v):
+        return float(v)
+    return value
 
 
 def serialize(products: list[OrderedDict], meta: TabularMeta, out_path: str) -> None:
@@ -206,8 +229,9 @@ def serialize(products: list[OrderedDict], meta: TabularMeta, out_path: str) -> 
         row_offset += 1
     ws.append(codes)
     row_offset += 1
-    for row in products:
-        ws.append([row.get(c, "") for c in codes])
+    numeric_cells = getattr(meta, "numeric_cells", set())
+    for idx, row in enumerate(products):
+        ws.append([_to_number_if_numeric(row.get(c, ""), (idx, c) in numeric_cells) for c in codes])
 
     # kopiujemy arkusze pomocnicze 1:1, zeby nic nie zgubic z oryginalnego szablonu
     # (meta.other_sheets to juz zwykle listy wierszy, nie zywe obiekty Worksheet -
