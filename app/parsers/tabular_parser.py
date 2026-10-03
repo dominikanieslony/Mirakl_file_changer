@@ -69,6 +69,9 @@ class TabularMeta:
     # _cell_to_str). Per komorka, bo kolumny bywaja mieszane (EAN czesciowo
     # jako tekst, czesciowo jako liczba - zaobserwowane w LI_Softshell).
     numeric_cells: set = field(default_factory=set)
+    # separator zrodlowego CSV - eksport zapisuje tym samym (eksporty Mirakl
+    # uzywaja sredników, np. Product_4960_*.csv)
+    delimiter: str = ","
 
 
 def _looks_like_code(value) -> bool:
@@ -87,28 +90,33 @@ def parse(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     return _parse_xlsx(path)
 
 
+def _detect_delimiter(path: str) -> str:
+    """Separator wykrywany z linii naglowka (naglowki nie zawieraja
+    separatorow, w przeciwienstwie do dlugich opisow w danych)."""
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        header = f.readline()
+    counts = {sep: header.count(sep) for sep in (";", ",", "\t", "|")}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ","
+
+
 def _parse_csv(path: str) -> tuple[list[OrderedDict], TabularMeta]:
-    df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    sep = _detect_delimiter(path)
+    df = pd.read_csv(path, dtype=str, keep_default_na=False, sep=sep)
     # Mapujemy rozpoznane aliasy naglowkow (np. angielskie etykiety
     # wyswietlane) na kanoniczne kody techniczne - patrz
     # dictionaries.normalize_headers() i komentarz w _parse_xlsx.
     codes = D.normalize_headers(list(df.columns))
     products = [OrderedDict(zip(codes, row)) for row in df.itertuples(index=False, name=None)]
-    meta = TabularMeta(file_format="csv", has_two_row_header=False, code_row=codes)
+    meta = TabularMeta(file_format="csv", has_two_row_header=False, code_row=codes, delimiter=sep)
     return products, meta
 
 
 def parse_txt(path: str) -> tuple[list[OrderedDict], TabularMeta]:
     """Parser dla .txt zawierajacego dane tabelaryczne (nie XML - to sprawdza
     juz loader.py przed wywolaniem tej funkcji). Separator jest automatycznie
-    wykrywany (przecinek/tabulator/srednik...) - w przeciwienstwie do
-    _parse_csv(), ktora zaklada przecinek (format .csv jest bardziej
-    przewidywalny, .txt bywa eksportowany z roznymi separatorami)."""
-    df = pd.read_csv(path, dtype=str, keep_default_na=False, sep=None, engine="python")
-    codes = D.normalize_headers(list(df.columns))
-    products = [OrderedDict(zip(codes, row)) for row in df.itertuples(index=False, name=None)]
-    meta = TabularMeta(file_format="csv", has_two_row_header=False, code_row=codes)
-    return products, meta
+    wykrywany (przecinek/tabulator/srednik...) - tak samo jak w _parse_csv()."""
+    return _parse_csv(path)
 
 
 def _parse_xlsx(path: str) -> tuple[list[OrderedDict], TabularMeta]:
@@ -214,7 +222,7 @@ def serialize(products: list[OrderedDict], meta: TabularMeta, out_path: str) -> 
     if meta.file_format == "csv":
         codes = meta.code_row or (list(products[0].keys()) if products else [])
         df = pd.DataFrame(products, columns=codes)
-        df.to_csv(out_path, index=False)
+        df.to_csv(out_path, index=False, sep=getattr(meta, "delimiter", ","))
         return
 
     wb = openpyxl.Workbook()

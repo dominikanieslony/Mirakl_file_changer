@@ -22,6 +22,8 @@ import re
 from collections import OrderedDict
 
 from . import dictionaries as D
+from . import field_requirements as FR
+from . import title_rules as TR
 from .categories import CategoryTree
 from .categories import _normalize as _cat_normalize
 from .categories import _stem as _cat_stem
@@ -40,6 +42,7 @@ COLORS_FIELD_CANDIDATES = ["colors", "Limango Farbe"]
 # jest juz osobno w polu `genders`, ktorego walidacja NIE zmienia sie przez to).
 TITLE_GENDER_WORDS = {
     "mädchen", "jungen", "junge", "baby", "damen", "herren", "kinder", "unisex",
+    "männer", "frauen", "erwachsene",
 }
 
 # kody rozmiarow, ktore nie powinny wystepowac w tytule (rozmiar to osobna
@@ -61,14 +64,6 @@ _COLOR_PREFIX_SEPARATOR_RE = re.compile(r"\s+[-–—]\s+|\s*:\s+")
 MULTICOLOR_WORDS = {"mehrfarbig", "bunt", "farbig", "multicolor", "multicolored",
                     "multi-colored", "colorful"}
 
-# stare wymiary na koncu tytulu (np. "- 9,8 x 14,5 cm") - zastepowane
-# sufiksem z build_dimension_suffix, gdy pola wymiarow sa kompletne
-_OLD_DIMENSIONS_RE = re.compile(
-    r"\s*[-–—]?\s*\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?"
-    r"(?:\s*[x×]\s*\d+(?:[.,]\d+)?)?\s*(?:mm|cm|m)\s*$",
-    re.IGNORECASE,
-)
-
 
 def _first_present(row: dict, candidates: list[str]) -> str | None:
     for c in candidates:
@@ -88,11 +83,26 @@ def issue(attribute, error_code, message, severity):
 
 # --- pojedyncze naprawy pol -----------------------------------------------------
 
+# Mojibake: UTF-8 odczytany jako cp1252 ("AnhÃ¤nger", "groÃŸer") - zaobserwowane
+# w ce-product-export (Lucardi). Para znakow Ã/Â + znak z gornej polowy cp1252.
+_MOJIBAKE_RE = re.compile(
+    "[\u00c2\u00c3][\u0080-\u00bf\u0152\u0153\u0160\u0161\u0178\u017d\u017e"
+    "\u0192\u02c6\u02dc\u2013\u2014\u2018\u2019\u201a\u201c\u201d\u201e"
+    "\u2020\u2021\u2022\u2026\u2030\u2039\u203a\u20ac\u2122]")
+
+
+def _fix_mojibake_pair(m: re.Match) -> str:
+    try:
+        return m.group(0).encode("cp1252").decode("utf-8")
+    except UnicodeError:
+        return m.group(0)
+
+
 def fix_broken_umlauts(text: str) -> tuple[str, bool]:
     if not text:
         return text, False
-    changed = False
-    new_text = text
+    new_text = _MOJIBAKE_RE.sub(_fix_mojibake_pair, text)
+    changed = new_text != text
     for broken, fixed in D.BROKEN_UMLAUT_WORDS.items():
         if broken == "Weiss":  # to nie jest blad, tylko wariant pisowni - pomijamy
             continue
@@ -103,7 +113,9 @@ def fix_broken_umlauts(text: str) -> tuple[str, bool]:
     return new_text, changed
 
 
-def fix_double_spaces_and_grammar(text: str) -> tuple[str, bool]:
+def fix_double_spaces_and_grammar(text: str, color_pattern: bool = True) -> tuple[str, bool]:
+    """color_pattern=False - tytul bez 'in Farbe' (patrz title_rules), wtedy
+    'im' jest zwyklym przyimkiem i nie zamieniamy go na 'in'."""
     if not text:
         return text, False
     changed = False
@@ -114,13 +126,20 @@ def fix_double_spaces_and_grammar(text: str) -> tuple[str, bool]:
     # " im " przed kolorem powinno byc " in " zgodnie ze wzorcem "Typ (+Model) in Farbe".
     # Gdy tytul ma juz 'in' (np. "im Querformat in Oldtimer"), 'im' jest
     # zwyklym przyimkiem, nie wstepem do koloru - zostawiamy.
-    if re.search(r"\bin\b", new_text):
+    if not color_pattern or re.search(r"\bin\b", new_text):
         return new_text, changed
     fixed = re.sub(r"\bim\b(?=\s+[A-ZÄÖÜ])", "in", new_text)
     if fixed != new_text:
         new_text = fixed
         changed = True
     return new_text, changed
+
+
+def _all_tokens_valid(value: str, valid: set[str]) -> bool:
+    """Pola wielowartosciowe rozdzielone '|' (np. ages 'child|baby' w
+    poprawnym eksporcie ce-product-export) - kazdy token musi byc poprawnym kodem."""
+    tokens = [t.strip() for t in value.split("|")]
+    return all(t in valid for t in tokens)
 
 
 def normalize_gender(value: str) -> tuple[str, bool, str | None]:
@@ -131,7 +150,7 @@ def normalize_gender(value: str) -> tuple[str, bool, str | None]:
     if not value:
         return value, False, None
     v = value.strip()
-    if v in D.GENDERS_VALID_CODES:
+    if _all_tokens_valid(v, D.GENDERS_VALID_CODES):
         return v, False, None
     suggestion = D.GENDERS_LABEL_TO_CODE.get(v.lower())
     if suggestion:
@@ -149,7 +168,7 @@ def normalize_age(value: str) -> tuple[str, bool, str | None]:
     if not value:
         return value, False, None
     v = value.strip()
-    if v in D.AGES_VALID_CODES:
+    if _all_tokens_valid(v, D.AGES_VALID_CODES):
         return v, False, None
     suggestion = D.AGES_LABEL_TO_CODE.get(v.lower())
     if suggestion:
@@ -181,15 +200,31 @@ def normalize_colors_field(value: str) -> tuple[str, bool, str | None]:
     return value, False, None
 
 
-def apply_translation_fixes(text: str) -> tuple[str, bool]:
+def apply_translation_fixes(text: str, protected: tuple[str, ...] = (),
+                            prose: bool = False) -> tuple[str, bool]:
     """Wspolny zestaw poprawek jezykowych (EN->DE slowa koloru/materialu +
-    naprawa ucietych znakow specjalnych) - uzywany w tytule i w Long Description."""
+    naprawa ucietych znakow specjalnych) - uzywany w tytule i w Long Description.
+    protected - nazwy modeli, ktorych nie tlumaczymy (opis wspomina tez modele
+    innych produktow z pliku: "kombinierbar mit der Velvet Rose Kette" nie moze
+    stac sie "Velvet Rosa"); prose - patrz fix_color_word."""
     if not text:
         return text, False
+    if protected:
+        pattern = re.compile("|".join(re.escape(p) for p in sorted(protected, key=len, reverse=True)),
+                             re.IGNORECASE)
+        parts, last, changed_any = [], 0, False
+        for m in pattern.finditer(text):
+            seg, ch = apply_translation_fixes(text[last:m.start()], prose=prose)
+            parts += [seg, m.group(0)]
+            changed_any = changed_any or ch
+            last = m.end()
+        seg, ch = apply_translation_fixes(text[last:], prose=prose)
+        parts.append(seg)
+        return "".join(parts), changed_any or ch
     changed_any = False
     new_text, ch = fix_broken_umlauts(text)
     changed_any = changed_any or ch
-    new_text, ch, _ = fix_color_word(new_text)
+    new_text, ch, _ = fix_color_word(new_text, prose=prose)
     changed_any = changed_any or ch
     for en, de in D.MATERIALS_EN_TO_DE.items():
         if en == de:
@@ -314,13 +349,14 @@ def _strip_gender_words(text: str) -> tuple[str, bool]:
     ("Baby Madchen X" -> "X"), jak i z lacznikiem ("Madchen-Set" -> "Set")."""
     if not text:
         return text, False
-    new_text = text
-    changed = False
-    for word in TITLE_GENDER_WORDS:
-        pattern = re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)
-        if pattern.search(new_text):
-            new_text = pattern.sub("", new_text)
-            changed = True
+    # cala fraza razem z "für" i spojnikami ("für Kinder", "Kinder und
+    # Erwachsene") - samo slowo zostawialoby osierocone "für"/"und"
+    alt = "|".join(sorted(map(re.escape, TITLE_GENDER_WORDS), key=len, reverse=True))
+    pattern = re.compile(
+        rf"(?:\b(?:für|for)\s+)?\b(?:{alt})\b(?:\s*(?:und|&|/|,)\s*\b(?:{alt})\b)*",
+        re.IGNORECASE)
+    new_text = pattern.sub("", text)
+    changed = new_text != text
     if not changed:
         return text, False
     # sprzataj slady po usunieciu (osierocone laczniki/dwukropki/przecinki na
@@ -340,9 +376,18 @@ def _strip_size_tokens(text: str) -> tuple[str, bool]:
     new_text = text
     changed = False
 
-    range_pattern = re.compile(r"\b\d{2,3}\s*[-–—]\s*\d{2,3}\b")
+    # zakres z jednostka ("Sattel 30-40 cm") to wymiar, nie rozmiar ciala
+    range_pattern = re.compile(
+        r"\b\d{2,3}\s*[-–—]\s*\d{2,3}\b(?!\s*(?:mm|cm|m|kg|g|ml|l|zoll|\"|%)(?![A-Za-z]))",
+        re.IGNORECASE)
     if range_pattern.search(new_text):
         new_text = range_pattern.sub("", new_text)
+        changed = True
+
+    sizes_alt = "|".join(sorted(map(re.escape, TITLE_SIZE_TOKENS), key=len, reverse=True))
+    compound = re.compile(rf"\b(?:{sizes_alt})\s*[-/]\s*(?:{sizes_alt})\b")
+    if compound.search(new_text):
+        new_text = compound.sub("", new_text)
         changed = True
 
     for token in TITLE_SIZE_TOKENS:
@@ -370,6 +415,9 @@ def _strip_trailing_mit_clause(text: str) -> tuple[str, bool]:
     if not matches:
         return text, False
     last = matches[-1]
+    if re.search(r"anteil\b", text[last.start():], re.IGNORECASE):
+        # "Schal mit Seidenanteil" - udzial materialu wymagany w tytule (Schals)
+        return text, False
     new_text = text[:last.start()]
     new_text = re.sub(r"[\s\-:,]+$", "", new_text)
     if not new_text:
@@ -404,22 +452,63 @@ def _find_model_span(text: str, model_name: str) -> tuple[int, int] | None:
     return (m.start(), m.end()) if m else None
 
 
+_BRAND_CHAR_VARIANTS = {
+    "ä": "(?:ä|ae|a)", "ö": "(?:ö|oe|o)", "ü": "(?:ü|ue|u)", "ß": "(?:ß|ss)",
+    "é": "[ée]", "è": "[èe]", "á": "[áa]", "à": "[àa]",
+}
+_BRAND_APOSTROPHES = "'´`’‘"
+_BRAND_WORD_CHAR = r"[0-9A-Za-zÀ-ÖØ-öø-ÿß]"
+
+
+def _brand_pattern(brand_name: str) -> re.Pattern | None:
+    """Wzorzec marki odporny na zaobserwowane/typowe roznice zapisu miedzy
+    brandName a tytulem: wielkosc liter, spacja/lacznik/kropka/brak miedzy
+    czlonami ("BlueStar" / "Blue Star" / "Blue-Star", "SWISS KOPPER" /
+    "Swiss-Kopper"), warianty apostrofu ("Les P´tites Bombes" / "P'tites"),
+    transliteracja umlautow ("Räuberella" / "Raeuberella"), znak ®/™ po marce
+    oraz poprzedzajace "von"/"by". Dopasowanie tylko calych slow - marka
+    "Lego" nie moze uciac poczatku "Legolas"."""
+    chunks = re.findall(rf"{_BRAND_WORD_CHAR}+|[{_BRAND_APOSTROPHES}]", brand_name)
+    if not chunks:
+        return None
+    parts = []
+    for chunk in chunks:
+        if chunk in _BRAND_APOSTROPHES:
+            parts.append(f"[{_BRAND_APOSTROPHES}]?")
+            continue
+        # "BlueStar" / "Chic4Baby" - czlony CamelCase i litery/cyfry tez
+        # moga byc w tytule rozdzielone ("Blue Star", "Chic 4 Baby")
+        for sub in re.split(r"(?<=[a-zäöüß])(?=[A-ZÄÖÜ])|(?<=[^\W\d_])(?=\d)|(?<=\d)(?=[^\W\d_])", chunk):
+            piece = "".join(_BRAND_CHAR_VARIANTS.get(ch.lower(), re.escape(ch)) for ch in sub)
+            if parts and not parts[-1].endswith("]?"):
+                parts.append(r"[\s\-_.&+]*")
+            parts.append(piece)
+    core = "".join(parts)
+    return re.compile(
+        rf"(?:\b(?:von|by)\s+)?(?<!{_BRAND_WORD_CHAR}){core}(?!{_BRAND_WORD_CHAR})\s*[®™©]?",
+        re.IGNORECASE)
+
+
 def _strip_brand_name(text: str, brand_name: str) -> tuple[str, bool]:
-    """Usuwa nazwe marki (brandName/Marke) z tekstu, gdziekolwiek wystepuje -
-    marka nie powinna byc czescia tytulu w docelowym formacie 'Typ produktu +
-    Model + in Kolor'. Tak jak modelName_text, brandName w danych bywa blednie
-    ustawione na caly tytul - w takim przypadku nie probujemy nic usuwac
-    (patrz _looks_like_short_value)."""
+    """Usuwa nazwe marki (brandName/Marke) z tekstu, gdziekolwiek wystepuje
+    (patrz _brand_pattern) - marka nie powinna byc czescia tytulu. Tak jak
+    modelName_text, brandName w danych bywa blednie ustawione na caly tytul -
+    w takim przypadku nie probujemy nic usuwac (patrz _looks_like_short_value).
+    Numeryczne ID marki (np. '22853') nie da sie dopasowac do tekstu."""
     brand_name = (brand_name or "").strip()
-    if not brand_name or not text or not _looks_like_short_value(brand_name):
+    if (not brand_name or not text or brand_name.isdigit()
+            or not _looks_like_short_value(brand_name)):
         return text, False
-    pattern = re.compile(re.escape(brand_name), re.IGNORECASE)
-    if not pattern.search(text):
+    pattern = _brand_pattern(brand_name)
+    if pattern is None or not pattern.search(text):
         return text, False
-    new_text = pattern.sub("", text)
-    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
-    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    new_text = pattern.sub(" ", text)
+    new_text = re.sub(r"^[\s\-:,|/]+", "", new_text)
+    new_text = re.sub(r"[\s\-:,|/]+$", "", new_text)
+    new_text = re.sub(r"\s+([,:])", r"\1", new_text)
     new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    if not new_text:
+        return text, False
     return new_text, new_text != text
 
 
@@ -457,6 +546,8 @@ def strip_title_junk(
     model_name: str,
     brand_name: str = "",
     category_tokens: set[str] | None = None,
+    keep_gender: bool = False,
+    keep_mit: bool = False,
 ) -> tuple[str, bool]:
     """Usuwa z tytulu tresci niezgodne z docelowym formatem 'Typ produktu +
     Model + in Kolor' (zalozenie 1d w README.md): marke, slowa plci/demografii
@@ -469,7 +560,8 @@ def strip_title_junk(
     dopasowanie do etykiety kategorii-liscia (_phrase_match_score); bez
     category_tokens domyslnie wygrywa fragment przed modelem, tak jak
     dotychczas. Bez rozpoznanego modelu usuwana jest tylko ostatnia klauzula
-    'mit X' (patrz _strip_trailing_mit_clause)."""
+    'mit X' (patrz _strip_trailing_mit_clause). keep_gender/keep_mit - patrz
+    title_rules.TitleProfile (plec/'mit X' wymagane w tytule danej grupy)."""
     if not title:
         return title, False
     model_name = (model_name or "").strip()
@@ -477,13 +569,24 @@ def strip_title_junk(
         model_name = ""
 
     def _clean_segment(segment: str) -> tuple[str, bool]:
-        t, ch1 = _strip_gender_words(segment)
+        t, ch1 = (segment, False) if keep_gender else _strip_gender_words(segment)
         t, ch2 = _strip_brand_name(t, brand_name)
         t, ch3 = _strip_size_tokens(t)
-        t, ch4 = _strip_trailing_mit_clause(t)
+        t, ch4 = (t, False) if keep_mit else _strip_trailing_mit_clause(t)
         return t, ch1 or ch2 or ch3 or ch4
 
     span = _find_model_span(title, model_name) if model_name else None
+    if span and keep_mit:
+        # fragment po modelu bywa wymaganym 'mit X' ("Halskette Luna mit
+        # Anhänger") - nie obcinamy go, ale model nadal chronimy przed
+        # czyszczeniem (np. kod rozmiaru w nazwie modelu "LEI Pearl S-M")
+        before, model_actual, after = title[:span[0]], title[span[0]:span[1]], title[span[1]:]
+        before_fixed, ch1 = _clean_segment(before)
+        after_fixed, ch2 = _clean_segment(after)
+        if not (ch1 or ch2):
+            return title, False
+        new_title = " ".join(p for p in (before_fixed.strip(), model_actual.strip(), after_fixed.strip()) if p)
+        return new_title, new_title != title
     if span:
         before, model_actual, after = title[:span[0]], title[span[0]:span[1]], title[span[1]:]
         before_fixed, _ = _clean_segment(before)
@@ -511,7 +614,67 @@ def _normalize_for_compare(text: str) -> str:
     return re.sub(r"[\s\-]+", " ", text).strip().lower()
 
 
-def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
+def _compact(text: str) -> str:
+    """Tylko litery/cyfry, lowercase - 'Spider Ball' == 'Spiderball'."""
+    return re.sub(r"[\W_]+", "", text).lower()
+
+
+def _strip_model_color_tail(model_name: str, color_value: str = "") -> str:
+    """'Spider Ball - Green' -> 'Spider Ball': koncowka modelu po myslniku
+    bedaca kolorem (kolor i tak trafia do tytulu jako 'in Kolor')."""
+    m = re.match(r"^(.*\S)\s*[-–—/]\s*([^-–—/]+)$", model_name)
+    if not m:
+        return model_name
+    tail = m.group(2).strip().lower()
+    colors = set(D.COLORS_EN_TO_DE) | {v.lower() for v in D.COLORS_EN_TO_DE.values()}
+    if color_value:
+        colors.add(color_value.strip().lower())
+    return m.group(1) if tail in colors else model_name
+
+
+def ensure_product_type(title: str, product_type: str, category_tokens: set[str] | None = None) -> tuple[str, bool]:
+    """Tytul bez typu produktu ("Hawk", gdy manufacturer_product_type_text_de =
+    "Hawk Stunt Scooter") - dopisuje na poczatku brakujaca czesc typu ("Stunt
+    Scooter Hawk"). Tylko gdy pole typu dzieli z tytulem slowo (czyli ma forme
+    "model + typ"), tytul jest krotki (sam model, patrz _looks_like_short_value)
+    i nie zawiera ani reszty typu, ani slowa z etykiety
+    kategorii - inaczej typ w tytule juz jest (np. "Hantel 2x 2kg Set" przy
+    typie "Hantelset")."""
+    if not title or not product_type:
+        return title, False
+    core_words = re.split(r"\s+in\s+", title.strip(), maxsplit=1)[0].split()
+    if len(core_words) > _MAX_SHORT_VALUE_WORDS:
+        # dlugi tytul to juz opis produktu, nie sam model
+        return title, False
+    title_tokens = {_compact(w) for w in re.split(r"[\s\-/]+", title) if _compact(w)}
+    title_compact = _compact(title)
+    pt_words = [w for w in re.split(r"[\s/]+", product_type.strip()) if _compact(w)]
+    if not title_tokens or not pt_words or len(pt_words) > _MAX_SHORT_VALUE_WORDS:
+        return title, False
+
+    def _in_title(word: str) -> bool:
+        c = _compact(word)
+        return c in title_tokens or c in title_compact  # "3er-Set" vs "3er Set"
+
+    # pole ma forme "model + typ": slowa modelu na poczatku, typ za nimi
+    n_model = 0
+    while n_model < len(pt_words) and _in_title(pt_words[n_model]):
+        n_model += 1
+    remainder = pt_words[n_model:]
+    if n_model == 0 or not remainder or any(_in_title(w) for w in remainder):
+        return title, False
+    # typ to rzeczowniki ("Stunt Scooter", "Kinderroller") - nie "mit Bommel",
+    # "blau-weiß", "Kinder"
+    colors = set(D.COLORS_EN_TO_DE) | {v.lower() for v in D.COLORS_EN_TO_DE.values()}
+    for w in remainder:
+        if not w[0].isupper() or w.lower() in TITLE_GENDER_WORDS or w.lower() in colors:
+            return title, False
+    if category_tokens and _phrase_match_score(title, category_tokens):
+        return title, False
+    return f"{' '.join(remainder)} {title.strip()}", True
+
+
+def ensure_model_present(title: str, model_name: str, color_value: str = "") -> tuple[str, bool]:
     """Jesli modelName_text nie wystepuje w tytule (nawet w formie z innym
     separatorem czlonow - patrz _normalize_for_compare) - dopisuje go na koncu
     tytulu. Wywolywane PRZED ensure_in_before_color w process_product(), zeby
@@ -521,13 +684,28 @@ def ensure_model_present(title: str, model_name: str) -> tuple[str, bool]:
     model_name = (model_name or "").strip()
     if not model_name or not title or not _looks_like_short_value(model_name):
         return title, False
+    if model_name.isdigit():
+        # sam numer artykulu (Lucardi: modelName_text='1062348' przy
+        # variant_group_code 'P-1062348') - w poprawnych tytulach go nie ma
+        return title, False
+    model_name = _strip_model_color_tail(model_name, color_value)
     if _normalize_for_compare(model_name) in _normalize_for_compare(title):
+        return title, False
+    if _compact(model_name) and _compact(model_name) in _compact(title):
+        # inny podzial na slowa ("Spider Ball" vs tytul "Spiderball Set")
+        return title, False
+    model_core, _ = _strip_size_tokens(model_name)
+    if model_core and _normalize_for_compare(model_core) in _normalize_for_compare(title):
+        # model rozni sie od tytulu tylko rozmiarem ("LEI Charm S-M" vs tytul
+        # "LEI Charm M-L") - rozmiar i tak nie nalezy do tytulu
         return title, False
     new_title = f"{title.rstrip()} {model_name}"
     return new_title, True
 
 
-def apply_title_fixes_excluding_model(text: str, model_name: str) -> tuple[str, bool]:
+def apply_title_fixes_excluding_model(text: str, model_name: str,
+                                      color_pattern: bool = True,
+                                      protected: tuple[str, ...] = ()) -> tuple[str, bool]:
     """Stosuje naprawy formatowania/jezyka do tytulu, ALE nie dotyka fragmentu
     bedacego nazwa modelu (dopasowanie bez wzgledu na wielkosc liter - patrz
     _find_model_span - bo modelName_text bywa zapisany inna wielkoscia liter
@@ -543,19 +721,21 @@ def apply_title_fixes_excluding_model(text: str, model_name: str) -> tuple[str, 
     span = _find_model_span(text, model_name) if model_name else None
     if span:
         before, model_actual, after = text[:span[0]], text[span[0]:span[1]], text[span[1]:]
-        before_fixed, ch1 = fix_double_spaces_and_grammar(before)
-        before_fixed, ch1b = apply_translation_fixes(before_fixed)
-        after_fixed, ch2 = fix_double_spaces_and_grammar(after)
-        after_fixed, ch2b = apply_translation_fixes(after_fixed)
+        before_fixed, ch1 = fix_double_spaces_and_grammar(before, color_pattern)
+        before_fixed, ch1b = apply_translation_fixes(before_fixed, protected)
+        after_fixed, ch2 = fix_double_spaces_and_grammar(after, color_pattern)
+        after_fixed, ch2b = apply_translation_fixes(after_fixed, protected)
         new_text = before_fixed + model_actual + after_fixed
         return new_text, ch1 or ch1b or ch2 or ch2b
-    new_text, ch1 = fix_double_spaces_and_grammar(text)
-    new_text, ch2 = apply_translation_fixes(new_text)
+    new_text, ch1 = fix_double_spaces_and_grammar(text, color_pattern)
+    new_text, ch2 = apply_translation_fixes(new_text, protected)
     return new_text, ch1 or ch2
 
 
 
-def fix_color_word(value: str) -> tuple[str, bool, str | None]:
+def fix_color_word(value: str, prose: bool = False) -> tuple[str, bool, str | None]:
+    """prose=True (Long Description) - pomija slowa, ktore sa tez zwyklymi
+    niemieckimi slowami (D.COLORS_EN_AMBIGUOUS_IN_PROSE, np. 'Rose')."""
     if not value:
         return value, False, None
     changed_any = False
@@ -563,8 +743,10 @@ def fix_color_word(value: str) -> tuple[str, bool, str | None]:
     def _repl(m: re.Match) -> str:
         nonlocal changed_any
         word = m.group(0)
+        if prose and word.lower() in D.COLORS_EN_AMBIGUOUS_IN_PROSE:
+            return word
         de = D.COLORS_EN_TO_DE.get(word.lower())
-        if de:
+        if de and de != word:
             changed_any = True
             return de
         return word
@@ -573,6 +755,9 @@ def fix_color_word(value: str) -> tuple[str, bool, str | None]:
     # itp.) - wazne zwlaszcza w tekscie prozy (Long Description), nie tylko
     # w krotkich, "czystych" polach jak tytul/kolor producenta
     new_value = re.sub(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", _repl, value)
+    if changed_any:
+        # "Schwarz Black" -> "Schwarz", nie "Schwarz Schwarz"
+        new_value = re.sub(r"\b(\w+)(\s+\1\b)+", r"\1", new_value)
     note = "Przetlumaczono angielska nazwe koloru na niemiecka." if changed_any else None
     return new_value, changed_any, note
 
@@ -633,15 +818,6 @@ def build_dimension_suffix(row: dict) -> str | None:
         return None
     unit = str(row.get("width_numeric_unit") or row.get("height_numeric_unit") or "cm").strip() or "cm"
     return f"(B){width} x (H){height} x (T){depth} {unit}"
-
-
-def _strip_old_dimensions(text: str) -> tuple[str, bool]:
-    if not text:
-        return text, False
-    new_text = _OLD_DIMENSIONS_RE.sub("", text).rstrip()
-    if not new_text:
-        return text, False
-    return new_text, new_text != text
 
 
 def _strip_word(text: str, word: str) -> tuple[str, bool]:
@@ -864,13 +1040,27 @@ def harmonize_variant_group_titles(products: list, motif_rows: list[bool]) -> di
     return issues
 
 
+def protected_model_names(products: list) -> tuple[str, ...]:
+    """Nazwy modeli z calego pliku zawierajace angielskie slowo koloru ("Blue
+    Lagoon", "Velvet Rose") - nie tlumaczymy ich w tytulach ani opisach."""
+    names = set()
+    for row in products:
+        model = str(row.get("modelName_text") or "").strip()
+        if (len(model) >= 3 and _looks_like_short_value(model)
+                and any(w.lower() in D.COLORS_EN_TO_DE for w in re.findall(r"[A-Za-z]+", model))):
+            names.add(model)
+    return tuple(names)
+
+
 def process_products(products: list, category_tree: CategoryTree,
                      reference_values: dict | None = None) -> list[tuple[OrderedDict, list[dict]]]:
     """Przetwarza caly plik: reguly wymagajace widoku grupy wariantow (prefiks
     koloru, spojnosc tytulow) + process_product dla kazdego wiersza."""
     prefixes = variant_group_color_prefixes(products, reference_values)
+    model_names = protected_model_names(products)
     results = [process_product(row, category_tree, color_prefix=prefixes[i],
-                               reference_values=reference_values)
+                               reference_values=reference_values,
+                               protected_names=model_names)
                for i, row in enumerate(products)]
     group_issues = harmonize_variant_group_titles([r[0] for r in results],
                                                   [p is not None for p in prefixes])
@@ -882,7 +1072,8 @@ def process_products(products: list, category_tree: CategoryTree,
 # --- glowna funkcja per-produkt --------------------------------------------------
 
 def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix: str | None = None,
-                    reference_values: dict | None = None) -> tuple[OrderedDict, list[dict]]:
+                    reference_values: dict | None = None,
+                    protected_names: tuple[str, ...] = ()) -> tuple[OrderedDict, list[dict]]:
     """color_prefix - patrz variant_group_color_prefixes; reference_values -
     patrz reference_values_from_rows (None = plik bez arkusza ReferenceData)."""
     new_row = OrderedDict(row)
@@ -905,7 +1096,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             title_text = new_row.get(title_field, "") if title_field else ""
             desc_field = _first_present(new_row, DESC_CODE_CANDIDATES)
             desc_text = new_row.get(desc_field, "") if desc_field else ""
-            check_text = f"{title_text} {desc_text}"
+            check_text, _ = fix_broken_umlauts(f"{title_text} {desc_text}")
 
             # Dedykowana, precyzyjna regula: wzorzec "X tlg./er-Set" w tytule a
             # kategoria "pojedyncza" -> sprawdz czy istnieje kategoria-siostra "*-Sets"
@@ -960,12 +1151,28 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
                              f"'{old_val}' -> '{motif}' (motyw rozroznia warianty).",
                              "auto_fixed"))
 
-    # --- tytul: docelowy format "Typ produktu + Model + in Kolor" (zalozenie
-    # 1d w README.md) - usuwamy smieci (plec, stary opis wzoru dublujacy
-    # kolor), naprawiamy jezyk/formatowanie, upewniamy sie ze model i kolor sa
-    # obecne (poza nazwa modelu, ktora nigdy nie jest modyfikowana) ---------
+    # --- tytul: struktura zalezna od grupy kategorii (title_rules.TitleProfile,
+    # zrodlo: Product_categories_guidelines) - domyslnie "Typ produktu + Model +
+    # in Kolor" (zalozenie 1d w README.md). Usuwamy smieci (plec, stary opis
+    # wzoru dublujacy kolor), naprawiamy jezyk/formatowanie, upewniamy sie ze
+    # model i (gdy grupa go wymaga) kolor sa obecne (poza nazwa modelu, ktora
+    # nigdy nie jest modyfikowana) ---------------------------------------------
     title_field = _first_present(new_row, TITLE_CODE_CANDIDATES)
-    if title_field and new_row.get(title_field):
+    title_group = FR.detect_group(category_tree.path_de(resolved_code) if resolved_code else None)
+    profile = TR.profile_for(title_group)
+    if title_field and new_row.get(title_field) and not profile.restructure:
+        # Literatura: "Typ - Tytul" - tytul ksiazki nie moze byc tlumaczony,
+        # przycinany ani uzupelniany o kolor; tylko uciete umlauty i spacje
+        text = str(new_row[title_field])
+        fixed, ch1 = fix_broken_umlauts(text)
+        fixed, _ = _strip_brand_name(fixed, str(new_row.get("brandName") or new_row.get("Marke") or ""))
+        fixed = re.sub(r"\s{2,}", " ", fixed).strip()
+        if ch1 or fixed != text:
+            new_row[title_field] = fixed
+            issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
+                                 f"Naprawiono formatowanie tytulu: '{text}' -> '{fixed}'.",
+                                 "auto_fixed"))
+    elif title_field and new_row.get(title_field):
         text = str(new_row[title_field])
         model_name = str(new_row.get("modelName_text", "") or "")
         sku_value = str(new_row.get("shop_sku") or new_row.get("Shop SKU") or "")
@@ -980,73 +1187,103 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             # odpowiednikiem ("Cat" vs "Katze") - nie wstawiamy go osobno
             model_name = ""
         brand_name = str(new_row.get("brandName") or new_row.get("Marke") or "")
+        if model_name.strip() and brand_name.strip():
+            # marka wewnatrz modelName_text ("Geographical Norway G-ROSE") -
+            # model jest chroniony przed czyszczeniem i dopisywany, gdy go
+            # brak (ensure_model_present), wiec bez tego marka wracalaby do
+            # tytulu; model rowny samej marce nie jest modelem
+            brand_re = _brand_pattern(brand_name.strip())
+            if brand_re and brand_re.fullmatch(model_name.strip()):
+                model_name = ""
+            else:
+                model_name, _ = _strip_brand_name(model_name, brand_name)
         category_tokens = _category_type_tokens(category_tree, resolved_code)
 
+        # koncowki wymagane przez wytyczne (wiek, ilosc, EEK, "Gr. 2") oraz
+        # wymiary odcinamy przed czyszczeniem i doklejamy z powrotem na koncu
+        core, suffixes = TR.split_suffixes(text, profile)
+        dim_parts = "".join(t for k, t in suffixes if k == "dimensions")
+        other_parts = "".join(t for k, t in suffixes if k != "dimensions")
+
+        # Wymiary: wzorzec "... – (B)W x (H)H x (T)D cm" (przyklad "Wandspiegel
+        # 3039 in Walnuss – (B)46 x (H)46 x (T)6 cm"); wg wytycznych tylko dla
+        # produktow onesize i tylko w grupach, ktorych struktura tytulu je zawiera
         dim_suffix = build_dimension_suffix(new_row)
-        base = text
-        pre_changed = False
-        if dim_suffix:
-            base, ch_dims = _strip_old_dimensions(base)
-            pre_changed = pre_changed or ch_dims
+        onesize = TR.is_onesize(new_row.get("sizes") or new_row.get("Größe"))
+        dims_removed = False
+        if profile.dimensions == "none" or (profile.dimensions == "onesize" and onesize is False):
+            dims_out = ""
+            dims_removed = bool(dim_parts)
+        elif (profile.dimensions == "onesize" and dim_suffix
+              and not re.search(r"\([A-Za-z]\)", dim_parts)):
+            # brak wymiarow lub stary format bez (B)/(H)/(T) -> z pol wymiarow
+            dims_out = f" – {dim_suffix}"
+        elif profile.dimensions == "onesize" and dim_parts:
+            # ujednolicenie separatora ("-120x120 cm", "-  75x100 cm" -> " – ...")
+            dims_out = " – " + re.sub(r"\s{2,}", " ", re.sub(r"^[\s,\-–—]+", "", dim_parts))
+        else:
+            dims_out = dim_parts
+
+        base = core
         if prefix_word:
-            base, ch_prefix = _strip_word(base, prefix_word)
-            pre_changed = pre_changed or ch_prefix
+            base, _ = _strip_word(base, prefix_word)
 
-        text4, changed = strip_title_junk(base, model_name, brand_name, category_tokens)
-        changed = changed or pre_changed
+        text4, _ = strip_title_junk(base, model_name, brand_name, category_tokens,
+                                    keep_gender=profile.keep_gender, keep_mit=profile.keep_mit)
+        use_color = profile.color is True or (
+            profile.color == "keep" and bool(re.search(r"\bi[nm]\s+[A-ZÄÖÜ]", core)))
+        text4, _ = apply_title_fixes_excluding_model(text4, model_name, use_color, protected_names)
+        color_for_model = str(new_row.get(color_field, "") or "") if color_field else ""
+        text4, _ = ensure_model_present(text4, model_name, color_for_model)
+        # tytul bedacy samym modelem ("Hawk") - typ z manufacturer_product_type_text_de
+        text4, _ = ensure_product_type(
+            text4, str(new_row.get("manufacturer_product_type_text_de") or ""), category_tokens)
 
-        text_translated, ch_translate = apply_title_fixes_excluding_model(text4, model_name)
-        text4 = text_translated
-        changed = changed or ch_translate
+        if use_color:
+            # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
+            # color_manufacturer_text, juz po ew. tlumaczeniu powyzej)
+            color_value = str(new_row.get(color_field, "") or "") if color_field else ""
+            if not color_value:
+                # brak color_manufacturer_text w ogole (nie tylko puste, ale pole
+                # nie istnieje w pliku) - probujemy jawnie oznaczonej wzmianki
+                # "Farbe: X" w Long Description, patrz extract_color_from_description
+                desc_field_fallback = _first_present(new_row, DESC_CODE_CANDIDATES)
+                desc_for_color = str(new_row.get(desc_field_fallback, "") or "") if desc_field_fallback else ""
+                extracted = extract_color_from_description(desc_for_color)
+                if extracted:
+                    color_value = extracted
+                    text4, _ = _strip_bare_color_word_fragments(text4, color_value)
+            text4, _ = ensure_in_before_color(text4, color_value)
 
-        text_model, ch_model = ensure_model_present(text4, model_name)
-        text4 = text_model
-        changed = changed or ch_model
-
-        # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
-        # color_manufacturer_text, juz po ew. tlumaczeniu powyzej)
-        color_value = str(new_row.get(color_field, "") or "") if color_field else ""
-        if not color_value:
-            # brak color_manufacturer_text w ogole (nie tylko puste, ale pole
-            # nie istnieje w pliku) - probujemy jawnie oznaczonej wzmianki
-            # "Farbe: X" w Long Description, patrz extract_color_from_description
-            desc_field_fallback = _first_present(new_row, DESC_CODE_CANDIDATES)
-            desc_for_color = str(new_row.get(desc_field_fallback, "") or "") if desc_field_fallback else ""
-            extracted = extract_color_from_description(desc_for_color)
-            if extracted:
-                color_value = extracted
-                text4, ch_color_cleanup = _strip_bare_color_word_fragments(text4, color_value)
-                changed = changed or ch_color_cleanup
-        text5, changed_in = ensure_in_before_color(text4, color_value)
-        if changed_in:
-            text4 = text5
-            changed = True
-
-        if changed:
-            new_row[title_field] = text4
+        format_changed = text4 != core or (bool(dim_parts) and bool(dims_out) and dims_out != dim_parts)
+        final_title = f"{text4}{other_parts}{dims_out}"
+        if final_title != text:
+            new_row[title_field] = final_title
+        if format_changed:
             issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
-                                 f"Naprawiono formatowanie/jezyk tytulu: '{text}' -> '{text4}'.",
+                                 f"Naprawiono formatowanie/jezyk tytulu: '{text}' -> '{final_title}'.",
                                  "auto_fixed"))
-        if " in " not in text4 and " im " not in text4:
+        if dims_removed:
+            reason = ("produkt nie jest onesize (wymiary podaje sie w polu rozmiaru)"
+                      if profile.dimensions == "onesize"
+                      else "struktura tytulu tej kategorii nie zawiera wymiarow")
+            issues.append(issue(title_field, "TITLE_DIMENSIONS_REMOVED",
+                                 f"Usunieto wymiary z tytulu - {reason}: '{text}' -> '{final_title}'.",
+                                 "auto_fixed"))
+        if dims_out and not dim_parts:
+            issues.append(issue(title_field, "TITLE_DIMENSIONS_ADDED",
+                                 f"Dodano wymiary do tytulu na podstawie pol width/height/depth_numeric: '{final_title}'.",
+                                 "auto_fixed"))
+        if profile.color is True and " in " not in text4 and " im " not in text4:
             issues.append(issue(title_field, "TITLE_PATTERN_MISSING",
                                  "Tytul nie zawiera wzorca 'Typ (+Model) in Farbe' - wymaga recznej weryfikacji.",
                                  "manual_review"))
-
-        # Wymiary w tytule (onesize/hardgoods): wzorzec "... – (B)W x (H)H x (T)D cm"
-        # potwierdzony przykladem "Wandspiegel 3039 in Walnuss – (B)46 x (H)46 x (T)6 cm"
-        has_dim_in_title = bool(re.search(r"\(B\)|\(H\)|\(T\)", text4))
-        if dim_suffix and not has_dim_in_title:
-            new_title = f"{text4} – {dim_suffix}"
-            new_row[title_field] = new_title
-            issues.append(issue(title_field, "TITLE_DIMENSIONS_ADDED",
-                                 f"Dodano wymiary do tytulu na podstawie pol width/height/depth_numeric: '{new_title}'.",
-                                 "auto_fixed"))
 
     # --- Long Description: te same poprawki jezykowe (EN->DE slowa koloru/materialu) -
     desc_field = _first_present(new_row, DESC_CODE_CANDIDATES)
     if desc_field and new_row.get(desc_field):
         desc_text = str(new_row[desc_field])
-        desc_fixed, desc_changed = apply_translation_fixes(desc_text)
+        desc_fixed, desc_changed = apply_translation_fixes(desc_text, protected_names, prose=True)
         if desc_changed:
             new_row[desc_field] = desc_fixed
             issues.append(issue(desc_field, "DESCRIPTION_LANGUAGE_FIXED",

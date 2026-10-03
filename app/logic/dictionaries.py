@@ -50,7 +50,19 @@ COLORS_EN_TO_DE = {
     "beige": "Beige",
     "rose": "Rosa",
     "anthracite": "Anthrazit",
+    "brown": "Braun",
+    "red": "Rot",
+    "yellow": "Gelb",
+    "purple": "Lila",
+    "violet": "Violett",
+    "silver": "Silber",
+    "turquoise": "Türkis",
 }
+
+# Slowa z COLORS_EN_TO_DE, ktore sa tez zwyklymi niemieckimi slowami - w prozie
+# (Long Description) nie tlumaczymy ich ("Rose" = roza, "Rose: 9 x 9 mm" jako
+# nazwa wariantu rosegold).
+COLORS_EN_AMBIGUOUS_IN_PROSE = {"rose"}
 
 # --- colors (Limango Color): POTWIERDZONE przez uzytkownika - pelna lista code
 # (identyczna z label, angielska, lowercase, l. pojedyncza z myslnikami dla
@@ -118,6 +130,12 @@ CARE_INSTRUCTION_TOKENS = {
 # by go nie znalazlo)
 CATEGORY_EXTRA_KEYWORDS = {
     "1597": ["armreif", "armreifen", "armband", "armbänder"],  # Armbänder
+    "1596": ["kette", "ketten", "halskette"],  # Halsketten
+    "1705": ["charm", "charms"],  # Anhänger
+    "10996": ["schmuckset", "adventskalender"],  # Schmuck-Sets
+    "2304": ["schmuckbox", "reiseetui", "schmuckaufbewahrung", "schmuckkästchen"],  # Schmuckkästen
+    "1648": ["fußkette", "fusskette", "fusskettchen", "fußkettchen"],  # Fußkettchen
+    "1595": ["creolen", "creole", "ohrring", "ohrstecker", "ohrhänger"],  # Ohrringe
 }
 
 KNOWN_ENUM_TOKENS = {

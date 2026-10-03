@@ -25,20 +25,31 @@ CORE_REQUIRED_FIELDS = [
 ]
 
 # grupa -> (slowa kluczowe wystepujace w sciezce kategorii DE, uzywane do wykrycia grupy)
+# Kolejnosc ma znaczenie - wygrywa pierwsza pasujaca grupa (np. "accessoires/
+# haarschmuck" musi byc przed "schmuck", "spielwaren" przed "elektronik"
+# - "Spielwaren/Elektronik" to zabawki). Pelne prefiksy sciezki tam, gdzie
+# samo slowo trafialoby tez w inne galezie ("Brillenetuis", "Gürteltaschen").
 GROUP_PATH_KEYWORDS = {
-    "bags_suitcases": ["reisegepäck", "taschen", "koffer"],
+    "accessories": ["accessoires/gürtel", "accessoires/schals", "accessoires/mützen",
+                    "accessoires/regenschirme", "accessoires/handschuhe",
+                    "accessoires/krawatten", "accessoires/haarschmuck",
+                    "accessoires/schlüsselanhänger"],
+    "sunglasses": ["accessoires/brillen"],
+    "bags_suitcases": ["reisegepäck", "taschen", "koffer", "accessoires/geldbörsen"],
     "jewellery": ["schmuck"],
     "shoes": ["schuhe"],
     "clothing": ["bekleidung"],
     "home_textiles": ["heimtextilien"],
-    "home_living": ["home und living", "haushaltswaren", "deko"],
+    "home_living": ["home und living", "haushaltswaren", "deko",
+                    "hartwaren/aufbewahren", "hartwaren/backen", "hartwaren/bad",
+                    "hartwaren/gedeckter tisch", "hartwaren/kochen", "hartwaren/kochgeschirr"],
     "furniture": ["möbel"],
     "cosmetics": ["beauty und parfum"],
-    "electronics": ["technik"],
+    "toys": ["spielwaren"],
+    "electronics": ["technik", "küchenelektronik"],
     "food": ["food"],
     "books": ["literatur"],
-    "sunglasses": ["brillen"],
-    "watches": ["uhren"],
+    "watches": ["accessoires/uhren"],
     "lamps": ["lampen"],
     "pet_accessories": ["tierbedarf"],
     "baby_equipment": ["babyartikel", "kinderwagen", "kindermöbel"],
@@ -64,7 +75,10 @@ GROUP_DESCRIPTION_SHOULD_MENTION = {
 def detect_group(path_de: str | None) -> str | None:
     if not path_de:
         return None
-    path_lower = path_de.lower()
+    # tylko dwa pierwsze czlony sciezki ("Accessoires/Taschen") - grupa wynika z
+    # kategorii 2. poziomu; nazwy lisci daja falszywe trafienia ("Lampen &
+    # Leuchten/Taschenlampen" -> torby, "Heimtextilien/Hausschuhe" -> buty)
+    path_lower = "/".join(path_de.lower().split("/")[:2])
     for group, keywords in GROUP_PATH_KEYWORDS.items():
         if any(kw in path_lower for kw in keywords):
             return group

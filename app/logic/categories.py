@@ -18,13 +18,19 @@ from typing import Optional
 from . import dictionaries as D
 
 
-# Prefiksy/kody kategorii testowych, ktore nigdy nie powinny byc sugerowane ani uzywane
-_TEST_PREFIXES = ("9_9", "201", "901", "TST_")
+# Galezie kategorii testowych (kod galezi + jej podkategorie "<kod>_..."), ktore
+# nigdy nie powinny byc sugerowane ani uzywane. Dopasowanie po calym czlonie
+# kodu - samo startswith("201") wykluczalo tez prawdziwe kategorie 2010/2012/
+# 2013/2014 (Sonnenbrillen, Regenschirme...).
+_TEST_BRANCHES = ("9_9", "201", "901")
+_TEST_PREFIXES = ("TST_",)
 _TEST_EXACT = {"testSchuhe"}
 
 
 def _is_test_category(code: str) -> bool:
     if code in _TEST_EXACT:
+        return True
+    if any(code == b or code.startswith(b + "_") for b in _TEST_BRANCHES):
         return True
     return any(code.startswith(p) for p in _TEST_PREFIXES)
 

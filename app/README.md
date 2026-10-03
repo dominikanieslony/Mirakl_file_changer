@@ -91,6 +91,28 @@ przez Streamlit Cloud trwa nieco dluzej, bo srodowisko jest instalowane od nowa.
    `color_manufacturer_text` (np. tytul "in Grau" a pole mowi "Dunkelgrau" ->
    "in Dunkelgrau"), oraz dopisuje kolor na koncu tytulu, jesli w ogole go tam
    nie ma.
+1e. Struktura tytulu zalezy od grupy kategorii (wytyczne
+   Product_categories_guidelines, profile w `logic/title_rules.py`; grupa
+   wykrywana z 2. poziomu sciezki kategorii w `field_requirements.detect_group`):
+   - bez "in Kolor": Beauty und Parfum, Food, Literatura, Schmuck,
+   - Spielwaren: kolor nie jest dopisywany, ale jesli tytul juz go ma, zostaje
+     (przytulanki, zestawy tekstylne - np. "Musselin Geschenk-Set ... in Rosa"),
+   - wymiary w tytule tylko dla `sizes = onesize` (dopisywane z pol
+     width/height/depth_numeric, usuwane przy produktach z rozmiarami):
+     Taschen/Reisegepäck, Möbel, Home & Living, Heimtextilien, Lampen,
+     Tierbedarf, Babyartikel, akcesoria (Schals, Gürtel...); nigdy w tytule:
+     Bekleidung, Schuhe, Brillen, Uhren, Spielwaren,
+   - zachowywane koncowki: wiek ("- ab 3 Jahren"), "Gr. 2"/"Gruppe 1/2/3",
+     ilosc (", 100ml", ", 2 x 65g"), "EEK A", ", je 24 Teile",
+   - Brillen: plec zostaje ("Damen-Sonnenbrille"); Schmuck: "mit X" zostaje
+     ("Halskette mit Anhänger"); "mit ...anteil" (Schals) zawsze zostaje,
+   - Literatura: tytul ksiazki tylko z naprawa znakow/spacji.
+   - tytul bedacy samym modelem ("Hawk") dostaje typ produktu z
+     `manufacturer_product_type_text_de` ("Hawk Stunt Scooter" -> "Stunt
+     Scooter Hawk in ..."), tylko gdy pole ma forme "model + typ" (rzeczowniki).
+   Elementy, ktorych nie da sie bezpiecznie wywnioskowac z danych (Leder-/
+   Gold- na poczatku, EEK, pojemnosc, kroj jeansow), nie sa ani dopisywane,
+   ani flagowane.
 1a. `ages` (Age Group) - potwierdzone przez uzytkownika na podstawie definicji
    atrybutu w systemie: poprawna wartosc pola to CODE (angielski, l. pojedyncza:
    `baby`/`child`/`adult`), NIE label wyswietlany w UI (`babies`/`children`/`adults`
