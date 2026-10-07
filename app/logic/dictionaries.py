@@ -158,6 +158,21 @@ KNOWN_ENUM_TOKENS = {
 # wylacznie po kodach technicznych), wiec caly plik przechodzilby przez
 # aplikacje kompletnie nietkniety, bez zadnej poprawki ani walidacji.
 # Zaobserwowane w realnym eksporcie CSV (2026-09-24):
+# brandName bywa numerycznym ID (eksporty XML/CSV) zamiast nazwy - bez nazwy
+# nie da sie usunac marki z tytulu. ID ustalone z plikow uzytkownika:
+# 16445 - temp.txt (tytuly "JAKO-O Lunchbox-Set ..."), 22853 - eksport
+# PURELEI (Product_4960_*.csv), 22814 - eksport Lucardi (ce-product-export),
+# 1622 - eksport Muchachomalo (ce-product-export-202610051149), pod tym samym
+# ID jest tez damska/dziewczeca linia "Chicamala" ("Chicamala Racerback -
+# Sport-BH"). Kilka nazw jednej marki rozdzielamy "|" (patrz _brand_pattern).
+BRAND_ID_TO_NAME = {
+    "1622": "Muchachomalo|Chicamala",
+    "16445": "JAKO-O",
+    "22853": "PURELEI",
+    "22814": "Lucardi",
+}
+
+
 FIELD_ALIASES = {
     "Category": "CATEGORY",
     "Shop SKU": "shop_sku",

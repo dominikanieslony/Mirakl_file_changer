@@ -45,6 +45,15 @@ TITLE_GENDER_WORDS = {
     "männer", "frauen", "erwachsene",
 }
 
+# ogolne nazwy dzialu/kategorii doklejane jako osobny czlon tytulu po
+# myslniku ("Boxershorts – 3er-Pack – Herren Unterhosen", "BH –
+# Mädchenunterwäsche") - to kategoria, nie typ produktu, wiec nie powinna byc
+# w tytule (eksport Muchachomalo, 2026-10-07). Usuwane tylko jako caly czlon
+# po myslniku, takze z przyklejonym slowem plci ("Damenunterwäsche").
+TITLE_GENERIC_CATEGORY_WORDS = {
+    "unterwäsche", "unterhosen", "wäsche", "bademode", "nachtwäsche", "dessous",
+}
+
 # kody rozmiarow, ktore nie powinny wystepowac w tytule (rozmiar to osobna
 # koncepcja niz "Typ produktu + Model + in Kolor" - potwierdzone przez
 # uzytkownika: "wszystkie rozmiary [...] powinny byc zawsze usuwane z tytulu").
@@ -361,9 +370,26 @@ def _strip_gender_words(text: str) -> tuple[str, bool]:
         return text, False
     # sprzataj slady po usunieciu (osierocone laczniki/dwukropki/przecinki na
     # brzegach, nadmiarowe spacje)
-    new_text = re.sub(r"^[\s\-:,]+", "", new_text)
-    new_text = re.sub(r"[\s\-:,]+$", "", new_text)
+    new_text = re.sub(r"^[\s\-–—:,]+", "", new_text)
+    new_text = re.sub(r"[\s\-–—:,]+$", "", new_text)
     new_text = re.sub(r"\s{2,}", " ", new_text).strip()
+    return new_text, new_text != text
+
+
+def _strip_generic_category_segments(text: str) -> tuple[str, bool]:
+    """Usuwa czlony tytulu po myslniku, ktore sa sama nazwa kategorii
+    (TITLE_GENERIC_CATEGORY_WORDS, opcjonalnie z plcia): "Boxershorts –
+    2er-Pack – Jungen Unterwäsche" -> "Boxershorts – 2er-Pack". Pierwszy
+    czlon (typ produktu) nigdy nie jest usuwany, a myslnik musi byc
+    poprzedzony spacja - "Sport-Unterwäsche" zostaje."""
+    if not text:
+        return text, False
+    words = "|".join(sorted(map(re.escape, TITLE_GENERIC_CATEGORY_WORDS), key=len, reverse=True))
+    genders = "|".join(sorted(map(re.escape, TITLE_GENDER_WORDS), key=len, reverse=True))
+    pattern = re.compile(
+        rf"\s+[-–—]\s*(?:(?:{genders})[\s-]*)?(?:{words})(?=\s+[-–—]|\s+i[nm]\s|\s*$)",
+        re.IGNORECASE)
+    new_text = pattern.sub("", text).strip()
     return new_text, new_text != text
 
 
@@ -467,7 +493,20 @@ def _brand_pattern(brand_name: str) -> re.Pattern | None:
     "Swiss-Kopper"), warianty apostrofu ("Les P´tites Bombes" / "P'tites"),
     transliteracja umlautow ("Räuberella" / "Raeuberella"), znak ®/™ po marce
     oraz poprzedzajace "von"/"by". Dopasowanie tylko calych slow - marka
-    "Lego" nie moze uciac poczatku "Legolas"."""
+    "Lego" nie moze uciac poczatku "Legolas". Kilka nazw jednej marki
+    (linie produktowe z D.BRAND_ID_TO_NAME, "Muchachomalo|Chicamala") -
+    pasuje dowolna z nich."""
+    cores = [c for c in (_brand_core(n) for n in brand_name.split("|")) if c]
+    if not cores:
+        return None
+    core = "|".join(cores)
+    return re.compile(
+        rf"(?:\b(?:von|by)\s+)?(?<!{_BRAND_WORD_CHAR})(?:{core})(?!{_BRAND_WORD_CHAR})\s*[®™©]?",
+        re.IGNORECASE)
+
+
+def _brand_core(brand_name: str) -> str | None:
+    """Wzorzec (bez kotwic) jednej nazwy marki - patrz _brand_pattern."""
     chunks = re.findall(rf"{_BRAND_WORD_CHAR}+|[{_BRAND_APOSTROPHES}]", brand_name)
     if not chunks:
         return None
@@ -483,18 +522,26 @@ def _brand_pattern(brand_name: str) -> re.Pattern | None:
             if parts and not parts[-1].endswith("]?"):
                 parts.append(r"[\s\-_.&+]*")
             parts.append(piece)
-    core = "".join(parts)
-    return re.compile(
-        rf"(?:\b(?:von|by)\s+)?(?<!{_BRAND_WORD_CHAR}){core}(?!{_BRAND_WORD_CHAR})\s*[®™©]?",
-        re.IGNORECASE)
+    return "".join(parts)
 
 
-def _strip_brand_name(text: str, brand_name: str) -> tuple[str, bool]:
+def _brand_name_for_text(row: dict) -> str:
+    """Nazwa marki do szukania w tekscie - brandName/Marke, a gdy to numeryczne
+    ID, nazwa ze slownika D.BRAND_ID_TO_NAME (pusta, gdy ID nieznane)."""
+    brand = str(row.get("brandName") or row.get("Marke") or "").strip()
+    if brand.isdigit():
+        return D.BRAND_ID_TO_NAME.get(brand, "")
+    return brand
+
+
+def _strip_brand_name(text: str, brand_name: str, allow_empty: bool = False) -> tuple[str, bool]:
     """Usuwa nazwe marki (brandName/Marke) z tekstu, gdziekolwiek wystepuje
     (patrz _brand_pattern) - marka nie powinna byc czescia tytulu. Tak jak
     modelName_text, brandName w danych bywa blednie ustawione na caly tytul -
     w takim przypadku nie probujemy nic usuwac (patrz _looks_like_short_value).
-    Numeryczne ID marki (np. '22853') nie da sie dopasowac do tekstu."""
+    Numeryczne ID marki (np. '22853') nie da sie dopasowac do tekstu.
+    allow_empty - text to tylko fragment tytulu obok modelu (patrz
+    strip_title_junk), wiec moze zostac pusty: "NOTIQUE " przed "Riviera"."""
     brand_name = (brand_name or "").strip()
     if (not brand_name or not text or brand_name.isdigit()
             or not _looks_like_short_value(brand_name)):
@@ -503,11 +550,11 @@ def _strip_brand_name(text: str, brand_name: str) -> tuple[str, bool]:
     if pattern is None or not pattern.search(text):
         return text, False
     new_text = pattern.sub(" ", text)
-    new_text = re.sub(r"^[\s\-:,|/]+", "", new_text)
-    new_text = re.sub(r"[\s\-:,|/]+$", "", new_text)
+    new_text = re.sub(r"^[\s\-–—:,|/]+", "", new_text)
+    new_text = re.sub(r"[\s\-–—:,|/]+$", "", new_text)
     new_text = re.sub(r"\s+([,:])", r"\1", new_text)
     new_text = re.sub(r"\s{2,}", " ", new_text).strip()
-    if not new_text:
+    if not new_text and not allow_empty:
         return text, False
     return new_text, new_text != text
 
@@ -568,9 +615,9 @@ def strip_title_junk(
     if not _looks_like_short_value(model_name):
         model_name = ""
 
-    def _clean_segment(segment: str) -> tuple[str, bool]:
+    def _clean_segment(segment: str, beside_model: bool = False) -> tuple[str, bool]:
         t, ch1 = (segment, False) if keep_gender else _strip_gender_words(segment)
-        t, ch2 = _strip_brand_name(t, brand_name)
+        t, ch2 = _strip_brand_name(t, brand_name, allow_empty=beside_model)
         t, ch3 = _strip_size_tokens(t)
         t, ch4 = (t, False) if keep_mit else _strip_trailing_mit_clause(t)
         return t, ch1 or ch2 or ch3 or ch4
@@ -581,16 +628,16 @@ def strip_title_junk(
         # Anhänger") - nie obcinamy go, ale model nadal chronimy przed
         # czyszczeniem (np. kod rozmiaru w nazwie modelu "LEI Pearl S-M")
         before, model_actual, after = title[:span[0]], title[span[0]:span[1]], title[span[1]:]
-        before_fixed, ch1 = _clean_segment(before)
-        after_fixed, ch2 = _clean_segment(after)
+        before_fixed, ch1 = _clean_segment(before, beside_model=True)
+        after_fixed, ch2 = _clean_segment(after, beside_model=True)
         if not (ch1 or ch2):
             return title, False
         new_title = " ".join(p for p in (before_fixed.strip(), model_actual.strip(), after_fixed.strip()) if p)
         return new_title, new_title != title
     if span:
         before, model_actual, after = title[:span[0]], title[span[0]:span[1]], title[span[1]:]
-        before_fixed, _ = _clean_segment(before)
-        after_fixed, _ = _clean_segment(after)
+        before_fixed, _ = _clean_segment(before, beside_model=True)
+        after_fixed, _ = _clean_segment(after, beside_model=True)
 
         use_after_as_type = False
         if category_tokens:
@@ -603,7 +650,11 @@ def strip_title_junk(
         new_title = " ".join(p for p in parts if p)
         return new_title, new_title != title
 
-    new_title, changed = _clean_segment(title)
+    # model spoza tytulu i tak zostanie dopisany (ensure_model_present), wiec
+    # tytul bedacy sama marka ("NOTIQUE") moze sie skurczyc do samego modelu
+    new_title, changed = _clean_segment(title, beside_model=bool(model_name))
+    if not new_title.strip() and model_name:
+        new_title, changed = model_name, True
     return new_title, changed
 
 
@@ -632,14 +683,20 @@ def _strip_model_color_tail(model_name: str, color_value: str = "") -> str:
     return m.group(1) if tail in colors else model_name
 
 
-def ensure_product_type(title: str, product_type: str, category_tokens: set[str] | None = None) -> tuple[str, bool]:
+def ensure_product_type(title: str, product_type: str, category_tokens: set[str] | None = None,
+                        model_name: str = "") -> tuple[str, bool]:
     """Tytul bez typu produktu ("Hawk", gdy manufacturer_product_type_text_de =
     "Hawk Stunt Scooter") - dopisuje na poczatku brakujaca czesc typu ("Stunt
     Scooter Hawk"). Tylko gdy pole typu dzieli z tytulem slowo (czyli ma forme
     "model + typ"), tytul jest krotki (sam model, patrz _looks_like_short_value)
     i nie zawiera ani reszty typu, ani slowa z etykiety
     kategorii - inaczej typ w tytule juz jest (np. "Hantel 2x 2kg Set" przy
-    typie "Hantelset")."""
+    typie "Hantelset").
+
+    Drugi przypadek: pole typu to sam typ ("Wochenplaner"), a tytul to
+    DOKLADNIE sam model ("Riviera" == modelName_text) - dopisujemy caly typ
+    na poczatku ("Wochenplaner Riviera"). Rownosc tytulu z modelem to
+    najmocniejszy sygnal, ze w tytule nie ma nic poza modelem."""
     if not title or not product_type:
         return title, False
     core_words = re.split(r"\s+in\s+", title.strip(), maxsplit=1)[0].split()
@@ -661,7 +718,12 @@ def ensure_product_type(title: str, product_type: str, category_tokens: set[str]
     while n_model < len(pt_words) and _in_title(pt_words[n_model]):
         n_model += 1
     remainder = pt_words[n_model:]
-    if n_model == 0 or not remainder or any(_in_title(w) for w in remainder):
+    if n_model == 0:
+        # pole to sam typ - tylko gdy tytul (bez 'in Kolor') to dokladnie model
+        core = " ".join(core_words)
+        if not model_name or _compact(core) != _compact(model_name):
+            return title, False
+    if not remainder or any(_in_title(w) for w in remainder):
         return title, False
     # typ to rzeczowniki ("Stunt Scooter", "Kinderroller") - nie "mit Bommel",
     # "blau-weiß", "Kinder"
@@ -1165,7 +1227,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         # przycinany ani uzupelniany o kolor; tylko uciete umlauty i spacje
         text = str(new_row[title_field])
         fixed, ch1 = fix_broken_umlauts(text)
-        fixed, _ = _strip_brand_name(fixed, str(new_row.get("brandName") or new_row.get("Marke") or ""))
+        fixed, _ = _strip_brand_name(fixed, _brand_name_for_text(new_row))
         fixed = re.sub(r"\s{2,}", " ", fixed).strip()
         if ch1 or fixed != text:
             new_row[title_field] = fixed
@@ -1186,7 +1248,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             # a modelName_text bywa wtedy ta sama wartoscia albo angielskim
             # odpowiednikiem ("Cat" vs "Katze") - nie wstawiamy go osobno
             model_name = ""
-        brand_name = str(new_row.get("brandName") or new_row.get("Marke") or "")
+        brand_name = _brand_name_for_text(new_row)
         if model_name.strip() and brand_name.strip():
             # marka wewnatrz modelName_text ("Geographical Norway G-ROSE") -
             # model jest chroniony przed czyszczeniem i dopisywany, gdy go
@@ -1228,6 +1290,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if prefix_word:
             base, _ = _strip_word(base, prefix_word)
 
+        base, _ = _strip_generic_category_segments(base)
         text4, _ = strip_title_junk(base, model_name, brand_name, category_tokens,
                                     keep_gender=profile.keep_gender, keep_mit=profile.keep_mit)
         use_color = profile.color is True or (
@@ -1237,7 +1300,8 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         text4, _ = ensure_model_present(text4, model_name, color_for_model)
         # tytul bedacy samym modelem ("Hawk") - typ z manufacturer_product_type_text_de
         text4, _ = ensure_product_type(
-            text4, str(new_row.get("manufacturer_product_type_text_de") or ""), category_tokens)
+            text4, str(new_row.get("manufacturer_product_type_text_de") or ""), category_tokens,
+            model_name)
 
         if use_color:
             # Dopisanie/naprawa 'in' przed kolorem (kolor = aktualna wartosc
@@ -1348,7 +1412,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
     brand_field = "brandName" if "brandName" in new_row else ("Marke" if "Marke" in new_row else None)
     if brand_field and new_row.get(brand_field):
         brand_val = str(new_row[brand_field]).strip()
-        if brand_val.isdigit():
+        if brand_val.isdigit() and brand_val not in D.BRAND_ID_TO_NAME:
             issues.append(issue(brand_field, "BRAND_IS_NUMERIC_ID",
                                  f"Marka podana jako numeryczne ID ({brand_val}) - brak slownika do weryfikacji nazwy.",
                                  "manual_review"))
