@@ -17,6 +17,7 @@ logic/field_requirements.py - wymagalnosc pol per grupa kategorii
 logic/validator.py          - walidacja koncowa
 logic/table_utils.py        - pomocnicze funkcje tabeli/podswietlania (bez zaleznosci od streamlit)
 data/all_categories.json    - drzewo kategorii
+data/brands.csv             - lista marek kod;nazwa (eksport listy wartosci brandName z Mirakl)
 ```
 
 ## Uruchomienie lokalne (opcjonalnie)
@@ -124,7 +125,11 @@ przez Streamlit Cloud trwa nieco dluzej, bo srodowisko jest instalowane od nowa.
 1c. `colors` (Limango Color) - potwierdzone przez uzytkownika: pelna, zamknieta
    lista 36 kodow (identyczne z label, angielskie, lowercase, np. `dark-blue`,
    `nocolor`, `multicolored`). Wartosci spoza tej listy sa flagowane.
-2. Niespojnosci formatu `brandName` (numeryczne ID vs tekst) sa tylko raportowane.
+2. Marka jest usuwana z tytulu. Gdy `brandName` to numeryczny kod, nazwa jest
+   brana z `data/brands.csv` (aktualizacja: podmienic plik nowym eksportem
+   kod;nazwa). Kod spoza listy jest raportowany do recznej weryfikacji. Marki
+   o nazwie bedacej zwyklym slowem tytulu (Gold, Stahl, Set... - patrz
+   `GENERIC_BRAND_WORDS`) nie sa usuwane, zeby nie zniszczyc koloru/typu.
 3. Slowniki tokenow enumeracyjnych obejmuja wylacznie wartosci zaobserwowane w danych
    przykladowych - nieznane tokeny sa oznaczane do recznej weryfikacji.
 4. Macierz wymagalnosci pol per kategoria jest zaszyta na sztywno w `field_requirements.py`.

@@ -43,6 +43,9 @@ COLORS_FIELD_CANDIDATES = ["colors", "Limango Farbe"]
 TITLE_GENDER_WORDS = {
     "mädchen", "jungen", "junge", "baby", "damen", "herren", "kinder", "unisex",
     "männer", "frauen", "erwachsene",
+    # niderlandzkie - tytuly DE bywaja (zaobserwowane) nieprzetlumaczone:
+    # "Racerback - Dames Sportbh" (eksport Muchachomalo)
+    "dames", "heren", "jongens", "meisjes", "kinderen",
 }
 
 # ogolne nazwy dzialu/kategorii doklejane jako osobny czlon tytulu po
@@ -393,6 +396,15 @@ def _strip_generic_category_segments(text: str) -> tuple[str, bool]:
     return new_text, new_text != text
 
 
+def _translate_title_nl_words(text: str) -> tuple[str, bool]:
+    """Niderlandzkie slowa typu produktu w tytule -> niemieckie
+    (D.TITLE_NL_TO_DE): "Racerback - Sportbh" -> "Racerback - Sport-BH"."""
+    new_text = text
+    for nl, de in D.TITLE_NL_TO_DE.items():
+        new_text = re.sub(rf"\b{re.escape(nl)}\b", de, new_text, flags=re.IGNORECASE)
+    return new_text, new_text != text
+
+
 def _strip_size_tokens(text: str) -> tuple[str, bool]:
     """Usuwa z tytulu wzmianki o rozmiarze - literowe kody (TITLE_SIZE_TOKENS:
     S/M/L/XL/...) oraz zakresy liczbowe (np. '158-170', typowe dla rozmiarow
@@ -527,10 +539,13 @@ def _brand_core(brand_name: str) -> str | None:
 
 def _brand_name_for_text(row: dict) -> str:
     """Nazwa marki do szukania w tekscie - brandName/Marke, a gdy to numeryczne
-    ID, nazwa ze slownika D.BRAND_ID_TO_NAME (pusta, gdy ID nieznane)."""
+    ID, nazwa z listy marek (D.brand_name_for_id; pusta, gdy ID nieznane).
+    Marki bedace zwyklym slowem tytulu (D.GENERIC_BRAND_WORDS) pomijamy."""
     brand = str(row.get("brandName") or row.get("Marke") or "").strip()
     if brand.isdigit():
-        return D.BRAND_ID_TO_NAME.get(brand, "")
+        brand = D.brand_name_for_id(brand)
+    if brand.lower() in D.GENERIC_BRAND_WORDS:
+        return ""
     return brand
 
 
@@ -1257,7 +1272,10 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             brand_re = _brand_pattern(brand_name.strip())
             if brand_re and brand_re.fullmatch(model_name.strip()):
                 model_name = ""
-            else:
+            elif _looks_like_short_value(model_name):
+                # dlugi modelName_text to opis, nie model - pomijany dalej
+                # (patrz _looks_like_short_value); wyciecie marki nie moze go
+                # skrocic do "modelu" doklejanego do tytulu
                 model_name, _ = _strip_brand_name(model_name, brand_name)
         category_tokens = _category_type_tokens(category_tree, resolved_code)
 
@@ -1290,6 +1308,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if prefix_word:
             base, _ = _strip_word(base, prefix_word)
 
+        base, _ = _translate_title_nl_words(base)
         base, _ = _strip_generic_category_segments(base)
         text4, _ = strip_title_junk(base, model_name, brand_name, category_tokens,
                                     keep_gender=profile.keep_gender, keep_mit=profile.keep_mit)
@@ -1412,9 +1431,9 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
     brand_field = "brandName" if "brandName" in new_row else ("Marke" if "Marke" in new_row else None)
     if brand_field and new_row.get(brand_field):
         brand_val = str(new_row[brand_field]).strip()
-        if brand_val.isdigit() and brand_val not in D.BRAND_ID_TO_NAME:
+        if brand_val.isdigit() and not D.brand_name_for_id(brand_val):
             issues.append(issue(brand_field, "BRAND_IS_NUMERIC_ID",
-                                 f"Marka podana jako numeryczne ID ({brand_val}) - brak slownika do weryfikacji nazwy.",
+                                 f"Marka podana jako numeryczne ID ({brand_val}) - brak tego kodu na liscie marek (data/brands.csv).",
                                  "manual_review"))
 
     # --- pola enumeracyjne: sprawdzenie wzgledem znanych tokenow -----------------

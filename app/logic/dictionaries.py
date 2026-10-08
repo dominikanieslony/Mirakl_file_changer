@@ -6,6 +6,9 @@ Zgodnie z ustaleniami: nie zgadujemy nowych tokenow spoza obserwacji - jesli
 wartosc nie jest w slowniku, pole jest oznaczane do recznej kontroli zamiast
 byc "poprawianym" na sile.
 """
+import csv
+import os
+from functools import lru_cache
 
 # --- genders: POTWIERDZONE przez uzytkownika na podstawie definicji atrybutu w
 # systemie (code/label sa tu identyczne, angielskie): female / male / unisex.
@@ -57,6 +60,7 @@ COLORS_EN_TO_DE = {
     "violet": "Violett",
     "silver": "Silber",
     "turquoise": "Türkis",
+    "lilac": "Flieder",
 }
 
 # Slowa z COLORS_EN_TO_DE, ktore sa tez zwyklymi niemieckimi slowami - w prozie
@@ -87,6 +91,13 @@ COLORS_LABEL_TO_CODE = {
     "multi-colored": "multicolored",
     "no color": "nocolor",
     "no-color": "nocolor",
+}
+
+# Niderlandzkie slowa typu produktu w tytulach DE (eksport Muchachomalo,
+# 2026-10-08: "Chicamala Racerback - Dames Sportbh") -> niemiecka forma.
+# Niderlandzkie slowa plci sa w rules_engine.TITLE_GENDER_WORDS.
+TITLE_NL_TO_DE = {
+    "sportbh": "Sport-BH",
 }
 
 # Naprawa uciecia niemieckich znakow specjalnych (obserwowane w tytulach pliku 1:
@@ -165,11 +176,42 @@ KNOWN_ENUM_TOKENS = {
 # 1622 - eksport Muchachomalo (ce-product-export-202610051149), pod tym samym
 # ID jest tez damska/dziewczeca linia "Chicamala" ("Chicamala Racerback -
 # Sport-BH"). Kilka nazw jednej marki rozdzielamy "|" (patrz _brand_pattern).
+# Pelna lista marek (kod -> nazwa) jest w data/brands.csv (eksport listy
+# wartosci brandName z Mirakl, named_list_values); ponizej tylko uzupelnienia
+# ponad te liste - dodatkowe linie produktowe pod tym samym ID.
 BRAND_ID_TO_NAME = {
     "1622": "Muchachomalo|Chicamala",
-    "16445": "JAKO-O",
-    "22853": "PURELEI",
-    "22814": "Lucardi",
+}
+
+_BRANDS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "brands.csv")
+
+
+@lru_cache(maxsize=1)
+def _brand_names_from_file() -> dict[str, str]:
+    try:
+        with open(_BRANDS_PATH, encoding="utf-8") as f:
+            # "|" w samej nazwie ("F|23") to nie separator linii produktowych
+            return {r["code"].strip(): r["name"].strip().replace("|", " ")
+                    for r in csv.DictReader(f, delimiter=";")}
+    except FileNotFoundError:
+        return {}
+
+
+def brand_name_for_id(code: str) -> str:
+    """Nazwa marki dla numerycznego brandName (pusta, gdy kod nieznany)."""
+    code = (code or "").strip()
+    return BRAND_ID_TO_NAME.get(code) or _brand_names_from_file().get(code, "")
+
+
+# Marki, ktorych nazwa jest zwyklym slowem tytulu (kolor, material, typ
+# produktu) - zaobserwowane kolizje listy marek ze slowami w tytulach
+# ("Gold", "Stahl", "Set", "Sneakers"...). Ich nie usuwamy z tytulu, bo
+# zniszczylibysmy kolor/typ ("Kette in Gold", "3er-Set").
+GENERIC_BRAND_WORDS = {
+    "gold", "silber", "silver", "stahl", "schwarz", "weiß", "braun", "rot",
+    "blau", "grün", "rosa", "pink", "coral", "ocean", "denim", "velvet",
+    "set", "sneakers", "polo", "outdoor", "basic", "style", "mini", "charm",
+    "pearl", "vintage", "sun", "ball", "big", "pro", "tiny",
 }
 
 
