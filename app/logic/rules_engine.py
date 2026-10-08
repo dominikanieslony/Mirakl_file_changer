@@ -365,7 +365,8 @@ def _strip_gender_words(text: str) -> tuple[str, bool]:
     # Erwachsene") - samo slowo zostawialoby osierocone "für"/"und"
     alt = "|".join(sorted(map(re.escape, TITLE_GENDER_WORDS), key=len, reverse=True))
     pattern = re.compile(
-        rf"(?:\b(?:für|for)\s+)?\b(?:{alt})\b(?:\s*(?:und|&|/|,)\s*\b(?:{alt})\b)*",
+        rf"(?:\b(?:für|for)\s+)?\b(?:{alt})\b(?:\s*(?:und|&|/|,)\s*\b(?:{alt})\b)*"
+        rf"(?:-(?=[A-Za-zÄÖÜäöüß]))?",  # "Kinder-Hausschuhe" -> "Hausschuhe"
         re.IGNORECASE)
     new_text = pattern.sub("", text)
     changed = new_text != text
@@ -413,6 +414,15 @@ def _strip_size_tokens(text: str) -> tuple[str, bool]:
         return text, False
     new_text = text
     changed = False
+
+    # "Größe 37", "Gr. 38/39", "Einheitsgröße", "One Size" - rozmiar jest w
+    # polu sizes (eksport Morethansocks: "Gartenclogs - Größe 37 - Braun")
+    size_word = re.compile(
+        r"\b(?:Größe|Grösse|Gr\.)\s*\d+(?:[.,]\d+)?(?:\s*[-/]\s*\d+(?:[.,]\d+)?)?"
+        r"|\b(?:Einheitsgröße|Einheitsgrösse|One[\s-]?Size)\b", re.IGNORECASE)
+    if size_word.search(new_text):
+        new_text = size_word.sub("", new_text)
+        changed = True
 
     # zakres z jednostka ("Sattel 30-40 cm") to wymiar, nie rozmiar ciala
     range_pattern = re.compile(
@@ -546,6 +556,13 @@ def _brand_name_for_text(row: dict) -> str:
         brand = D.brand_name_for_id(brand)
     if brand.lower() in D.GENERIC_BRAND_WORDS:
         return ""
+    words = brand.split()
+    if (len(words) >= 2 and "|" not in brand and len(words[0]) >= 2
+            and words[0].lower() not in D.GENERIC_BRAND_WORDS
+            and all(w.lower().strip("&.,") in D.BRAND_GENERIC_SUFFIX_WORDS or w == "&"
+                    for w in words[1:])):
+        # "XQ FOOTWEAR" zapisane w tytule jako "XQ" (patrz BRAND_GENERIC_SUFFIX_WORDS)
+        return f"{brand}|{words[0]}"
     return brand
 
 
@@ -839,6 +856,85 @@ def fix_color_word(value: str, prose: bool = False) -> tuple[str, bool, str | No
     return new_value, changed_any, note
 
 
+def _color_word_to_de(word: str) -> str | None:
+    lw = word.lower()
+    return D.COLORS_EN_TO_DE.get(lw) or D.COLORS_FOREIGN_TO_DE.get(lw)
+
+
+_GERMAN_COLOR_WORDS = None
+
+
+def _is_german_color(word: str) -> bool:
+    global _GERMAN_COLOR_WORDS
+    if _GERMAN_COLOR_WORDS is None:
+        _GERMAN_COLOR_WORDS = ({v.lower() for v in D.COLORS_EN_TO_DE.values()}
+                               | {v.lower() for v in D.COLORS_FOREIGN_TO_DE.values()})
+    return word.lower() in _GERMAN_COLOR_WORDS
+
+
+def _shade_compound(shade: str, base: str) -> str:
+    """"Dunkel" + "Blau" -> "Dunkelblau"; "Hell" + "Pink" -> "Hellrosa"."""
+    if base.lower() == "pink":
+        base = "rosa"
+    return shade + base.lower()
+
+
+def fix_manufacturer_color(value: str) -> tuple[str, bool, str | None]:
+    """color_manufacturer_text zawsze po niemiecku: tlumaczy nazwy kolorow z
+    EN/NL/FR/IT/ES/PL/DA/SV (D.COLORS_EN_TO_DE + D.COLORS_FOREIGN_TO_DE),
+    frazy ("Off White") i odcienie, takze w zlozeniach ("Donker Grijs",
+    "Donkerbruin", "Dark Blue" -> "Dunkelgrau", "Dunkelbraun", "Dunkelblau").
+    Slowa spoza slownikow (motywy: "Flamingo", "Stars") zostaja bez zmian."""
+    if not value:
+        return value, False, None
+    new = value
+    for phrase, de in D.COLOR_PHRASES_TO_DE.items():
+        new = re.sub(rf"(?<![\w]){re.escape(phrase)}(?![\w])", de, new, flags=re.IGNORECASE)
+
+    parts = re.split(r"([A-Za-zÀ-ÖØ-öø-ÿĄ-žß]+)", new)  # [sep, slowo, sep, slowo, ..., sep]
+    out = []
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        if i % 2 == 0:
+            out.append(tok)
+            i += 1
+            continue
+        shade = D.COLOR_SHADE_PREFIXES_TO_DE.get(tok.lower())
+        # odcien jako osobne slowo: "Donker Grijs" -> "Dunkelgrau"
+        if shade and i + 2 < len(parts) and parts[i + 1].strip() == "":
+            nxt = parts[i + 2]
+            base = _color_word_to_de(nxt) or (nxt if _is_german_color(nxt) else None)
+            if base:
+                out.append(_shade_compound(shade, base))
+                i += 3
+                continue
+        de = _color_word_to_de(tok)
+        if de and i + 2 < len(parts) and parts[i + 1].strip() == "":
+            # odcien po kolorze: "Bleu foncé" -> "Dunkelblau"
+            post = D.COLOR_SHADE_SUFFIXES_TO_DE.get(parts[i + 2].lower())
+            if post:
+                out.append(_shade_compound(post, de))
+                i += 3
+                continue
+        if de is None:
+            # odcien w zlozeniu: "Donkerbruin", "Lichtgrijs"
+            for prefix, shade_de in D.COLOR_SHADE_PREFIXES_TO_DE.items():
+                rest = tok[len(prefix):]
+                if tok.lower().startswith(prefix) and len(rest) >= 3:
+                    base = _color_word_to_de(rest) or (rest if _is_german_color(rest) else None)
+                    if base:
+                        de = _shade_compound(shade_de, base)
+                        break
+        out.append(de if de else tok)
+        i += 1
+    new = "".join(out)
+    new = re.sub(r"\b(\w+)(\s+\1\b)+", r"\1", new)  # "Schwarz Black" -> "Schwarz"
+    if new == value:
+        return value, False, None
+    return new, True, f"Przetlumaczono kolor producenta na niemiecki: '{value}' -> '{new}'."
+
+
 def fix_material_composition(value: str) -> tuple[str, bool, str | None]:
     if not value:
         return value, False, None
@@ -983,19 +1079,23 @@ def _manufacturer_word_to_code(word: str) -> str | None:
 def derive_limango_color(manufacturer_color: str,
                          allowed: set[str] | None) -> tuple[str | None, list[str]]:
     """Wartosc dla pustego pola colors na podstawie color_manufacturer_text.
-    Zwraca (wartosc albo None, znalezione kody). Wartosc tylko gdy kolor jest
-    jednoznaczny: jeden kolor bazowy ('Dunkelgrau' -> grau) albo okreslenie
-    wielokolorowe ('Mehrfarbig - Flamingo' -> bunt). Slowa nie bedace kolorem
+    Zwraca (wartosc albo None, znalezione kody). Jeden kolor bazowy
+    ('Dunkelgrau' -> grau) albo okreslenie wielokolorowe ('Mehrfarbig -
+    Flamingo', 'Bicolor' -> bunt). Przy kilku kolorach bierzemy pierwszy - tak
+    robia dostawcy w poprawionych eksportach ('Gold Weiß' -> gold: metal, potem
+    kamien); wywolujacy oznacza to do weryfikacji. Slowa nie bedace kolorem
     (motywy, 'Matt') sa pomijane. Format wartosci wg szablonu: etykieta z
     ReferenceData, gdy plik ja ma, inaczej code (COLORS_VALID_CODES)."""
     codes: list[str] = []
-    for word in re.findall(r"[^\W\d_]+", manufacturer_color or ""):
+    # "GoldRosegold" -> "Gold Rosegold"
+    text = re.sub(r"(?<=[a-zäöüß])(?=[A-ZÄÖÜ])", " ", manufacturer_color or "")
+    for word in re.findall(r"[^\W\d_]+", text):
         code = _manufacturer_word_to_code(word)
         if code and code not in codes:
             codes.append(code)
     if "multicolored" in codes:
         chosen = "multicolored"
-    elif len(codes) == 1:
+    elif codes:
         chosen = codes[0]
     else:
         return None, codes
@@ -1170,15 +1270,59 @@ def protected_model_names(products: list) -> tuple[str, ...]:
     return tuple(names)
 
 
+def generic_model_names(products: list, min_groups: int = 3) -> frozenset[str]:
+    """modelName_text wspolny dla wielu roznych grup wariantow to nie model,
+    tylko ogolny typ/kategoria - czesto w obcym jezyku ("Compressiesokken",
+    "Sloffen kids unisex - HW8Q" w eksporcie Morethansocks przy kilkunastu
+    roznych produktach). Takiego "modelu" nie dopisujemy do tytulu."""
+    groups: dict[str, set[str]] = {}
+    for row in products:
+        model = str(row.get("modelName_text") or "").strip()
+        group = str(row.get("variant_group_code") or row.get("Variant Group") or "").strip()
+        if model and group:
+            groups.setdefault(model, set()).add(group)
+    return frozenset(m for m, g in groups.items() if len(g) >= min_groups)
+
+
+def tidy_title_separators(text: str) -> str:
+    """Sprzatanie po usunieciu czlonow tytulu: "6er-Pack - - Vorteilspack" ->
+    "6er-Pack - Vorteilspack" oraz czlon po myslniku powtarzajacy wczesniejsze
+    slowo ("Gartenclogs - gefüttert - Gartenclogs in Blau" -> "Gartenclogs -
+    gefüttert in Blau")."""
+    if not text:
+        return text
+    t = re.sub(r"\s+([-–—])(?:\s+[-–—])+(?=\s)", r" \1", text)
+    t = re.sub(r"^\s*[-–—]\s+", "", t)
+    t = re.sub(r"\s+[-–—]\s*$", "", t)
+    t = re.sub(r"\s+[-–—]\s+(?=in\s)", " ", t)  # "Gartenclogs - in Blau"
+    parts = re.split(r"(\s+[-–—]\s+)", t)
+    if len(parts) >= 3:
+        seen_words = {w.lower() for w in re.findall(r"[\wÄÖÜäöüß]+", parts[0])}
+        kept = [parts[0]]
+        for k in range(2, len(parts), 2):
+            seg, sep = parts[k], parts[k - 1]
+            m = re.match(r"^(.*?)(\s+in\s+.*)?$", seg)
+            body, tail = m.group(1), m.group(2) or ""
+            if body.strip().lower() in seen_words:
+                kept[-1] = kept[-1] + tail
+                continue
+            seen_words |= {w.lower() for w in re.findall(r"[\wÄÖÜäöüß]+", body)}
+            kept += [sep, seg]
+        t = "".join(kept)
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
 def process_products(products: list, category_tree: CategoryTree,
                      reference_values: dict | None = None) -> list[tuple[OrderedDict, list[dict]]]:
     """Przetwarza caly plik: reguly wymagajace widoku grupy wariantow (prefiks
     koloru, spojnosc tytulow) + process_product dla kazdego wiersza."""
     prefixes = variant_group_color_prefixes(products, reference_values)
     model_names = protected_model_names(products)
+    generic_models = generic_model_names(products)
     results = [process_product(row, category_tree, color_prefix=prefixes[i],
                                reference_values=reference_values,
-                               protected_names=model_names)
+                               protected_names=model_names,
+                               generic_models=generic_models)
                for i, row in enumerate(products)]
     group_issues = harmonize_variant_group_titles([r[0] for r in results],
                                                   [p is not None for p in prefixes])
@@ -1191,7 +1335,8 @@ def process_products(products: list, category_tree: CategoryTree,
 
 def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix: str | None = None,
                     reference_values: dict | None = None,
-                    protected_names: tuple[str, ...] = ()) -> tuple[OrderedDict, list[dict]]:
+                    protected_names: tuple[str, ...] = (),
+                    generic_models: frozenset[str] = frozenset()) -> tuple[OrderedDict, list[dict]]:
     """color_prefix - patrz variant_group_color_prefixes; reference_values -
     patrz reference_values_from_rows (None = plik bez arkusza ReferenceData)."""
     new_row = OrderedDict(row)
@@ -1251,7 +1396,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
     # przy ustawianiu 'in' przed kolorem w tytule) ---------------------------------
     color_field = _first_present(new_row, COLOR_MANUFACTURER_CANDIDATES)
     if color_field and new_row.get(color_field):
-        new_val, changed, note = fix_color_word(str(new_row[color_field]))
+        new_val, changed, note = fix_manufacturer_color(str(new_row[color_field]))
         if changed:
             new_row[color_field] = new_val
             issues.append(issue(color_field, "COLOR_LANGUAGE_FIXED", note, "auto_fixed"))
@@ -1264,18 +1409,23 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         refs = reference_values or {}
         allowed = refs.get(colors_field) or refs.get("colors")
         derived, found = derive_limango_color(manufacturer_color, allowed)
-        if derived:
+        if derived and len(found) > 1 and "multicolored" not in found:
+            new_row[colors_field] = derived
+            issues.append(issue(colors_field, "COLOR_FILLED_FROM_MANUFACTURER",
+                                 f"Uzupelniono puste pole {colors_field} pierwszym kolorem "
+                                 f"producenta '{manufacturer_color}' -> '{derived}' (kolory: "
+                                 f"{', '.join(found)}) - sprawdz, czy to kolor dominujacy.",
+                                 "manual_review"))
+        elif derived:
             new_row[colors_field] = derived
             issues.append(issue(colors_field, "COLOR_FILLED_FROM_MANUFACTURER",
                                  f"Uzupelniono puste pole {colors_field} na podstawie koloru "
                                  f"producenta '{manufacturer_color}' -> '{derived}'.",
                                  "auto_fixed"))
         else:
-            reason = (f"kilka kolorow ({', '.join(found)}) - wybierz jeden albo kolor wielobarwny"
-                      if len(found) > 1 else "nie rozpoznano koloru")
             issues.append(issue(colors_field, "COLOR_NOT_DERIVED",
-                                 f"Pole {colors_field} jest puste; kolor producenta "
-                                 f"'{manufacturer_color}': {reason} - do recznego uzupelnienia.",
+                                 f"Pole {colors_field} jest puste; nie rozpoznano koloru w kolorze "
+                                 f"producenta '{manufacturer_color}' - do recznego uzupelnienia.",
                                  "manual_review"))
 
     # --- kolor producenta: usuniecie wspolnego prefiksu grupy wariantow
@@ -1315,6 +1465,12 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
     elif title_field and new_row.get(title_field):
         text = str(new_row[title_field])
         model_name = str(new_row.get("modelName_text", "") or "")
+        title_compact = _compact(text)
+        if (_compact(model_name) not in title_compact
+                and (model_name.strip() in generic_models or _strip_gender_words(model_name)[1])):
+            # ogolny typ wspolny dla wielu produktow albo "model" ze slowem
+            # plci ("Klompen dames") - patrz generic_model_names
+            model_name = ""
         sku_value = str(new_row.get("shop_sku") or new_row.get("Shop SKU") or "")
         if model_name.strip() and model_name.strip() == sku_value.strip():
             # modelName_text bywa (zaobserwowane) uzywane jako wewnetrzny kod
@@ -1402,6 +1558,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             text4, _ = ensure_in_before_color(text4, color_value)
 
         format_changed = text4 != core or (bool(dim_parts) and bool(dims_out) and dims_out != dim_parts)
+        text4 = tidy_title_separators(text4)
         final_title = f"{text4}{other_parts}{dims_out}"
         if final_title != text:
             new_row[title_field] = final_title

@@ -114,6 +114,14 @@ przez Streamlit Cloud trwa nieco dluzej, bo srodowisko jest instalowane od nowa.
    Elementy, ktorych nie da sie bezpiecznie wywnioskowac z danych (Leder-/
    Gold- na poczatku, EEK, pojemnosc, kroj jeansow), nie sa ani dopisywane,
    ani flagowane.
+1f. `color_manufacturer_text` jest zawsze tlumaczony na niemiecki
+   (`fix_manufacturer_color`): nazwy kolorow EN/NL/FR/IT/ES/PL/DA/SV, frazy
+   ("Off White"), odcienie przed i po kolorze ("Donker Grijs", "Donkerbruin",
+   "Bleu foncé", "GRIS F" -> "Dunkelgrau", "Dunkelbraun", "Dunkelblau",
+   "Dunkelgrau"). Nieznane slowa (motywy: "Flamingo", "Stars") zostaja.
+   modelName_text w obcym jezyku / ogolny typ ("Compressiesokken", "Klompen
+   dames" - wspolny dla >=3 grup wariantow albo ze slowem plci) nie jest
+   doklejany do tytulu, jesli go w tytule nie ma.
 1a. `ages` (Age Group) - potwierdzone przez uzytkownika na podstawie definicji
    atrybutu w systemie: poprawna wartosc pola to CODE (angielski, l. pojedyncza:
    `baby`/`child`/`adult`), NIE label wyswietlany w UI (`babies`/`children`/`adults`

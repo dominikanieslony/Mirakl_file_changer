@@ -63,6 +63,64 @@ COLORS_EN_TO_DE = {
     "lilac": "Flieder",
 }
 
+# Kolory w innych jezykach -> DE, tylko dla pola koloru producenta i tytulu
+# (nie dla prozy - tam obce slowa bywaja nazwami wlasnymi). Zaobserwowane:
+# eksport Morethansocks (NL: Zwart, Bruin, Grijs, Roze, Donkerbruin...).
+COLORS_FOREIGN_TO_DE = {
+    # EN (dodatkowe, niebezpieczne w prozie)
+    "navy": "Marineblau", "army": "Olivgrün", "olive": "Oliv", "pink": "Pink",
+    "orange": "Orange", "gold": "Gold", "cream": "Creme", "khaki": "Khaki",
+    "burgundy": "Bordeaux", "bordeaux": "Bordeaux", "mint": "Mint",
+    "multicolor": "Mehrfarbig", "multicolour": "Mehrfarbig", "multicolored": "Mehrfarbig",
+    "camel": "Camel", "taupe": "Taupe", "nude": "Nude", "ivory": "Elfenbein",
+    # NL
+    "zwart": "Schwarz", "wit": "Weiß", "grijs": "Grau", "blauw": "Blau",
+    "groen": "Grün", "bruin": "Braun", "rood": "Rot", "geel": "Gelb",
+    "roze": "Rosa", "paars": "Lila", "oranje": "Orange", "zilver": "Silber",
+    "goud": "Gold", "lichtblauw": "Hellblau", "donkerblauw": "Dunkelblau",
+    "zand": "Sand", "creme": "Creme", "antraciet": "Anthrazit", "ecru": "Ecru",
+    # FR
+    "noir": "Schwarz", "blanc": "Weiß", "gris": "Grau", "bleu": "Blau",
+    "vert": "Grün", "marron": "Braun", "rouge": "Rot", "jaune": "Gelb",
+    "argent": "Silber", "doré": "Gold",
+    # IT / ES
+    "nero": "Schwarz", "bianco": "Weiß", "grigio": "Grau", "blu": "Blau",
+    "verde": "Grün", "marrone": "Braun", "rosso": "Rot", "giallo": "Gelb",
+    "negro": "Schwarz", "blanco": "Weiß", "azul": "Blau", "rojo": "Rot",
+    "amarillo": "Gelb", "marrón": "Braun", "morado": "Lila",
+    # PL
+    "czarny": "Schwarz", "biały": "Weiß", "szary": "Grau", "niebieski": "Blau",
+    "zielony": "Grün", "brązowy": "Braun", "czerwony": "Rot", "żółty": "Gelb",
+    "różowy": "Rosa", "fioletowy": "Lila", "granatowy": "Marineblau",
+    # DA / SV / NO
+    "sort": "Schwarz", "svart": "Schwarz", "hvid": "Weiß", "vit": "Weiß",
+    "grå": "Grau", "blå": "Blau", "grøn": "Grün", "grön": "Grün", "brun": "Braun",
+    "rød": "Rot", "röd": "Rot", "gul": "Gelb",
+}
+
+# przedrostki/okreslenia odcienia (osobne slowo albo poczatek zlozenia:
+# "Donker Grijs", "Donkerbruin", "Dark Blue") -> niemiecki przedrostek
+COLOR_SHADE_PREFIXES_TO_DE = {
+    "donker": "Dunkel", "dark": "Dunkel", "licht": "Hell", "light": "Hell",
+    "lys": "Hell", "mørk": "Dunkel", "clair": "Hell", "foncé": "Dunkel",
+    "pastel": "Pastell", "neon": "Neon", "jasny": "Hell", "ciemny": "Dunkel",
+}
+
+# odcien PO kolorze (FR: "Bleu foncé", "Vert clair" - takze bez akcentu,
+# zaobserwowane "BLEU FONCE" w ood_data_2)
+# oraz skroty F/C ("GRIS F" = gris foncé, "BLEU C" = bleu clair - potwierdzone
+# tytulami tego samego dostawcy: "in Dunkelgrau", "in Hellblau"); tylko
+# bezposrednio po nazwie koloru
+COLOR_SHADE_SUFFIXES_TO_DE = {"foncé": "Dunkel", "fonce": "Dunkel", "clair": "Hell",
+                              "f": "Dunkel", "c": "Hell"}
+
+# wieloczlonowe nazwy kolorow
+COLOR_PHRASES_TO_DE = {
+    "bleu marine": "Marineblau", "bleu ciel": "Hellblau", "army green": "Olivgrün",
+    "off white": "Wollweiß", "off-white": "Wollweiß", "offwhite": "Wollweiß",
+    "navy blue": "Marineblau", "sky blue": "Himmelblau", "rose gold": "Roségold",
+}
+
 # Slowa z COLORS_EN_TO_DE, ktore sa tez zwyklymi niemieckimi slowami - w prozie
 # (Long Description) nie tlumaczymy ich ("Rose" = roza, "Rose: 9 x 9 mm" jako
 # nazwa wariantu rosegold).
@@ -119,6 +177,8 @@ MANUFACTURER_COLOR_TO_CODE = {
     "rot": "red", "red": "red",
     "bordeaux": "bordeaux", "weinrot": "bordeaux", "burgund": "bordeaux",
     "rosa": "rose", "rosé": "rose", "rose": "rose",
+    # bizuteria: dostawca (PURELEI) mapuje Rosegold na rose
+    "rosegold": "rose", "roségold": "rose",
     "pink": "pink",
     "lila": "purple", "violett": "purple", "purple": "purple",
     "flieder": "lilac", "lilac": "lilac",
@@ -128,6 +188,7 @@ MANUFACTURER_COLOR_TO_CODE = {
     "sand": "sand", "taupe": "taupe",
     "transparent": "transparent",
     "mehrfarbig": "multicolored", "bunt": "multicolored", "farbig": "multicolored",
+    "bicolor": "multicolored", "tricolor": "multicolored", "zweifarbig": "multicolored",
     "multicolor": "multicolored", "multicolored": "multicolored",
     "colorful": "multicolored",
 }
@@ -263,6 +324,16 @@ def brand_name_for_id(code: str) -> str:
     code = (code or "").strip()
     return BRAND_ID_TO_NAME.get(code) or _brand_names_from_file().get(code, "")
 
+
+# Ogolne drugie czlony nazw marek - w tytule marka bywa zapisana samym
+# pierwszym czlonem ("XQ - Gartenclogs" przy marce "XQ FOOTWEAR",
+# eksport Morethansocks), wiec szukamy tez tego skrotu.
+BRAND_GENERIC_SUFFIX_WORDS = {
+    "footwear", "sockswear", "socks", "fashion", "collection", "kids", "design",
+    "wear", "shoes", "jewellery", "jewelry", "accessories", "sports", "sport",
+    "outdoor", "home", "living", "gmbh", "ag", "ltd", "co", "company", "group",
+    "international", "official", "originals", "brand", "store", "shop",
+}
 
 # Marki, ktorych nazwa jest zwyklym slowem tytulu (kolor, material, typ
 # produktu) - zaobserwowane kolizje listy marek ze slowami w tytulach
