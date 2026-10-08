@@ -967,6 +967,47 @@ def check_reference_value(field_code: str, value: str, allowed: set[str]) -> str
     return f"Pole {field_code}: " + "; ".join(problems) + "." + hint
 
 
+# --- colors (Limango Color) z koloru producenta -----------------------------------
+
+def _manufacturer_word_to_code(word: str) -> str | None:
+    w = word.lower()
+    code = D.MANUFACTURER_COLOR_TO_CODE.get(w)
+    if code:
+        return code
+    for prefix in D.MANUFACTURER_COLOR_SHADE_PREFIXES:
+        if w.startswith(prefix) and len(w) > len(prefix):
+            return D.MANUFACTURER_COLOR_TO_CODE.get(w[len(prefix):].lstrip("-"))
+    return None
+
+
+def derive_limango_color(manufacturer_color: str,
+                         allowed: set[str] | None) -> tuple[str | None, list[str]]:
+    """Wartosc dla pustego pola colors na podstawie color_manufacturer_text.
+    Zwraca (wartosc albo None, znalezione kody). Wartosc tylko gdy kolor jest
+    jednoznaczny: jeden kolor bazowy ('Dunkelgrau' -> grau) albo okreslenie
+    wielokolorowe ('Mehrfarbig - Flamingo' -> bunt). Slowa nie bedace kolorem
+    (motywy, 'Matt') sa pomijane. Format wartosci wg szablonu: etykieta z
+    ReferenceData, gdy plik ja ma, inaczej code (COLORS_VALID_CODES)."""
+    codes: list[str] = []
+    for word in re.findall(r"[^\W\d_]+", manufacturer_color or ""):
+        code = _manufacturer_word_to_code(word)
+        if code and code not in codes:
+            codes.append(code)
+    if "multicolored" in codes:
+        chosen = "multicolored"
+    elif len(codes) == 1:
+        chosen = codes[0]
+    else:
+        return None, codes
+    if allowed:
+        lower_map = {a.lower(): a for a in allowed}
+        for label in D.COLOR_CODE_DE_LABELS.get(chosen, []) + [chosen]:
+            if label in lower_map:
+                return lower_map[label], codes
+        return None, codes
+    return (chosen if chosen in D.COLORS_VALID_CODES else None), codes
+
+
 # --- grupy wariantow ---------------------------------------------------------------
 
 def _concrete_color_words(reference_values: dict | None) -> set[str]:
@@ -1214,6 +1255,28 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if changed:
             new_row[color_field] = new_val
             issues.append(issue(color_field, "COLOR_LANGUAGE_FIXED", note, "auto_fixed"))
+
+    # --- colors (Limango Color) puste -> z koloru producenta, przed usunieciem
+    # prefiksu grupy wariantow ('Mehrfarbig - Flamingo' to nadal 'bunt') --------
+    colors_field = _first_present(new_row, COLORS_FIELD_CANDIDATES)
+    manufacturer_color = str(new_row.get(color_field) or "").strip() if color_field else ""
+    if colors_field and not str(new_row.get(colors_field) or "").strip() and manufacturer_color:
+        refs = reference_values or {}
+        allowed = refs.get(colors_field) or refs.get("colors")
+        derived, found = derive_limango_color(manufacturer_color, allowed)
+        if derived:
+            new_row[colors_field] = derived
+            issues.append(issue(colors_field, "COLOR_FILLED_FROM_MANUFACTURER",
+                                 f"Uzupelniono puste pole {colors_field} na podstawie koloru "
+                                 f"producenta '{manufacturer_color}' -> '{derived}'.",
+                                 "auto_fixed"))
+        else:
+            reason = (f"kilka kolorow ({', '.join(found)}) - wybierz jeden albo kolor wielobarwny"
+                      if len(found) > 1 else "nie rozpoznano koloru")
+            issues.append(issue(colors_field, "COLOR_NOT_DERIVED",
+                                 f"Pole {colors_field} jest puste; kolor producenta "
+                                 f"'{manufacturer_color}': {reason} - do recznego uzupelnienia.",
+                                 "manual_review"))
 
     # --- kolor producenta: usuniecie wspolnego prefiksu grupy wariantow
     # ("Mehrfarbig - Flamingo" -> "Flamingo"), patrz variant_group_color_prefixes -

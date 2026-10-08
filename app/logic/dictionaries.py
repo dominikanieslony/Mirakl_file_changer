@@ -93,6 +93,67 @@ COLORS_LABEL_TO_CODE = {
     "no-color": "nocolor",
 }
 
+# --- uzupelnianie pustego 'colors' z color_manufacturer_text (potwierdzone przez
+# uzytkownika 2026-10-08: "bierzmy to z manufacturer color designation jak
+# mozliwe"). Slowo koloru producenta (DE/EN, lowercase) -> code Limango Color.
+MANUFACTURER_COLOR_TO_CODE = {
+    "schwarz": "black", "black": "black",
+    "weiß": "white", "weiss": "white", "white": "white",
+    "grau": "gray", "grey": "gray", "gray": "gray",
+    "anthrazit": "anthracite", "anthracite": "anthracite",
+    "blau": "blue", "blue": "blue",
+    "dunkelblau": "dark-blue", "navy": "dark-blue", "navyblau": "dark-blue",
+    "marine": "dark-blue", "marineblau": "dark-blue", "nachtblau": "dark-blue",
+    "darkblue": "dark-blue",
+    "hellblau": "light-blue", "lightblue": "light-blue",
+    "braun": "brown", "brown": "brown",
+    "hellbraun": "light-brown", "lightbrown": "light-brown",
+    "beige": "beige",
+    "creme": "cream", "cream": "cream", "ecru": "cream", "offwhite": "cream",
+    "grün": "green", "green": "green",
+    "hellgrün": "light-green", "lightgreen": "light-green",
+    "oliv": "olive", "olivgrün": "olive", "olive": "olive",
+    "khaki": "khaki",
+    "gelb": "yellow", "yellow": "yellow",
+    "orange": "orange",
+    "rot": "red", "red": "red",
+    "bordeaux": "bordeaux", "weinrot": "bordeaux", "burgund": "bordeaux",
+    "rosa": "rose", "rosé": "rose", "rose": "rose",
+    "pink": "pink",
+    "lila": "purple", "violett": "purple", "purple": "purple",
+    "flieder": "lilac", "lilac": "lilac",
+    "türkis": "turquoise", "turquoise": "turquoise",
+    "petrol": "petrol",
+    "gold": "gold", "silber": "silver", "silver": "silver", "bronze": "bronze",
+    "sand": "sand", "taupe": "taupe",
+    "transparent": "transparent",
+    "mehrfarbig": "multicolored", "bunt": "multicolored", "farbig": "multicolored",
+    "multicolor": "multicolored", "multicolored": "multicolored",
+    "colorful": "multicolored",
+}
+
+# przedrostki odcienia, po ktorych odcieciu zostaje kolor bazowy
+# ("Dunkelgrau" -> "grau"); sprawdzane dopiero, gdy cale slowo nie jest w mapie
+# (hellblau/dunkelblau maja wlasne kody)
+MANUFACTURER_COLOR_SHADE_PREFIXES = ("dunkel", "hell", "mittel", "tief", "pastell",
+                                     "neon", "dark", "light")
+
+# code Limango Color -> etykiety w szablonach DE (arkusz ReferenceData). Szablon
+# de_DE z 2026-09 ma literowke 'tükis' - stad dwie wersje dla turquoise.
+COLOR_CODE_DE_LABELS = {
+    "anthracite": ["anthrazit"], "beige": ["beige"], "black": ["schwarz"],
+    "blue": ["blau"], "bordeaux": ["bordeaux"], "bronze": ["bronze"],
+    "brown": ["braun"], "cream": ["creme"], "dark-blue": ["dunkelblau"],
+    "gold": ["gold"], "gray": ["grau"], "green": ["grün"], "khaki": ["khaki"],
+    "light-blue": ["hellblau"], "light-brown": ["hellbraun"],
+    "light-green": ["hellgrün"], "lilac": ["flieder"],
+    "multicolored": ["bunt", "mehrfarbig"], "olive": ["oliv"],
+    "orange": ["orange"], "petrol": ["petrol"], "pink": ["pink"],
+    "purple": ["lila"], "red": ["rot"], "rose": ["rosa"], "sand": ["sand"],
+    "silver": ["silber"], "taupe": ["taupe"], "turquoise": ["türkis", "tükis"],
+    "white": ["weiß"], "yellow": ["gelb"], "transparent": ["transparent"],
+}
+
 # Niderlandzkie slowa typu produktu w tytulach DE (eksport Muchachomalo,
 # 2026-10-08: "Chicamala Racerback - Dames Sportbh") -> niemiecka forma.
 # Niderlandzkie slowa plci sa w rules_engine.TITLE_GENDER_WORDS.
