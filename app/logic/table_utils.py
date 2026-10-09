@@ -9,9 +9,9 @@ from collections import OrderedDict
 
 import pandas as pd
 
-FLAG_COLUMN = "⚠ Pola do sprawdzenia"
-CELL_HIGHLIGHT_STYLE = "background-color: #fff3b0"
-FLAG_CELL_HIGHLIGHT_STYLE = "background-color: #ffd166; font-weight: 600"
+FLAG_COLUMN = "⚠ Fields to check"
+CELL_HIGHLIGHT_STYLE = "background-color: #fff3b0; color: #c62828; font-weight: 600"
+FLAG_CELL_HIGHLIGHT_STYLE = "background-color: #ffd166; color: #c62828; font-weight: 600"
 
 
 def products_to_dataframe(products: list[OrderedDict]) -> pd.DataFrame:

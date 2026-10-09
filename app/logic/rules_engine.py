@@ -166,9 +166,9 @@ def normalize_gender(value: str) -> tuple[str, bool, str | None]:
         return v, False, None
     suggestion = D.GENDERS_LABEL_TO_CODE.get(v.lower())
     if suggestion:
-        return v, False, (f"Wartosc '{v}' nie jest poprawnym kodem pola - "
-                           f"powinno byc: '{suggestion}'.")
-    return v, False, (f"Nieznana wartosc '{v}' dla pola plci - oczekiwany kod to jeden z: "
+        return v, False, (f"Value '{v}' is not a valid field code - "
+                           f"should be: '{suggestion}'.")
+    return v, False, (f"Unknown gender value '{v}' - expected one of the codes: "
                        f"{sorted(D.GENDERS_VALID_CODES)}.")
 
 
@@ -184,9 +184,9 @@ def normalize_age(value: str) -> tuple[str, bool, str | None]:
         return v, False, None
     suggestion = D.AGES_LABEL_TO_CODE.get(v.lower())
     if suggestion:
-        return v, False, (f"Wartosc '{v}' to etykieta (label), nie poprawny kod (code) pola - "
-                           f"powinno byc: '{suggestion}'.")
-    return v, False, (f"Nieznana wartosc '{v}' dla grupy wiekowej - oczekiwany kod to jeden z: "
+        return v, False, (f"Value '{v}' is a label, not a valid field code - "
+                           f"should be: '{suggestion}'.")
+    return v, False, (f"Unknown age group value '{v}' - expected one of the codes: "
                        f"{sorted(D.AGES_VALID_CODES)}.")
 
 
@@ -204,11 +204,11 @@ def normalize_colors_field(value: str) -> tuple[str, bool, str | None]:
             continue
         suggestion = D.COLORS_LABEL_TO_CODE.get(t.lower())
         if suggestion:
-            problems.append(f"'{t}' -> powinno byc '{suggestion}'")
+            problems.append(f"'{t}' -> should be '{suggestion}'")
         else:
-            problems.append(f"'{t}' - nieznany kod koloru")
+            problems.append(f"'{t}' - unknown color code")
     if problems:
-        return value, False, "Pole colors: " + "; ".join(problems) + "."
+        return value, False, "Field colors: " + "; ".join(problems) + "."
     return value, False, None
 
 
@@ -852,7 +852,7 @@ def fix_color_word(value: str, prose: bool = False) -> tuple[str, bool, str | No
     if changed_any:
         # "Schwarz Black" -> "Schwarz", nie "Schwarz Schwarz"
         new_value = re.sub(r"\b(\w+)(\s+\1\b)+", r"\1", new_value)
-    note = "Przetlumaczono angielska nazwe koloru na niemiecka." if changed_any else None
+    note = "Translated English color name to German." if changed_any else None
     return new_value, changed_any, note
 
 
@@ -932,7 +932,7 @@ def fix_manufacturer_color(value: str) -> tuple[str, bool, str | None]:
     new = re.sub(r"\b(\w+)(\s+\1\b)+", r"\1", new)  # "Schwarz Black" -> "Schwarz"
     if new == value:
         return value, False, None
-    return new, True, f"Przetlumaczono kolor producenta na niemiecki: '{value}' -> '{new}'."
+    return new, True, f"Translated manufacturer color to German: '{value}' -> '{new}'."
 
 
 def fix_material_composition(value: str) -> tuple[str, bool, str | None]:
@@ -952,7 +952,7 @@ def fix_material_composition(value: str) -> tuple[str, bool, str | None]:
         if pattern.search(new_value):
             new_value = pattern.sub(de, new_value)
             changed = True
-    note = "Naprawiono format/jezyk skladu materialowego." if changed else None
+    note = "Fixed material composition format/language." if changed else None
     return new_value, changed, note
 
 
@@ -1052,15 +1052,15 @@ def check_reference_value(field_code: str, value: str, allowed: set[str]) -> str
                 continue
             proper = lower_map.get(part.lower())
             if proper:
-                problems.append(f"'{part}' -> powinno byc '{proper}' (wielkosc liter)")
+                problems.append(f"'{part}' -> should be '{proper}' (letter case)")
             else:
-                problems.append(f"'{part}' nie wystepuje w ReferenceData")
+                problems.append(f"'{part}' is not in ReferenceData")
     if not problems:
         return None
     hint = ""
     if len(allowed) <= 40:
-        hint = f" Dozwolone: {sorted(allowed)}."
-    return f"Pole {field_code}: " + "; ".join(problems) + "." + hint
+        hint = f" Allowed: {sorted(allowed)}."
+    return f"Field {field_code}: " + "; ".join(problems) + "." + hint
 
 
 # --- colors (Limango Color) z koloru producenta -----------------------------------
@@ -1241,8 +1241,8 @@ def harmonize_variant_group_titles(products: list, motif_rows: list[bool]) -> di
             for i, title, _, _ in parts:
                 issues.setdefault(i, []).append(issue(
                     title_field, "TITLE_GROUP_INCONSISTENT",
-                    f"Tytuly w grupie wariantow nie maja wspolnego rdzenia ('{title}') - "
-                    f"do recznej weryfikacji.", "manual_review"))
+                    f"Titles in the variant group have no common base ('{title}') - "
+                    f"needs manual review.", "manual_review"))
             continue
         common_core = " ".join(common)
         for i, title, core, rest in parts:
@@ -1253,7 +1253,7 @@ def harmonize_variant_group_titles(products: list, motif_rows: list[bool]) -> di
             removed = " ".join(core.split()[len(common):])
             issues.setdefault(i, []).append(issue(
                 title_field, "TITLE_GROUP_HARMONIZED",
-                f"Ujednolicono tytul z grupa wariantow (usunieto '{removed}'): "
+                f"Aligned title with its variant group (removed '{removed}'): "
                 f"'{title}' -> '{new_title}'.", "auto_fixed"))
     return issues
 
@@ -1352,7 +1352,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         resolved_code = category_tree.resolve(raw_cat)
         if resolved_code is None:
             issues.append(issue(cat_code_field, "CATEGORY_UNRESOLVED",
-                                 f"Nie udalo sie rozpoznac kategorii '{raw_cat}' w all_categories.json.",
+                                 f"Could not resolve category '{raw_cat}' in all_categories.json.",
                                  "manual_review"))
         else:
             title_field = _first_present(new_row, TITLE_CODE_CANDIDATES)
@@ -1369,10 +1369,10 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             if set_sibling:
                 issues.append(issue(
                     cat_code_field, "CATEGORY_SET_MISMATCH",
-                    (f"Tytul wskazuje na zestaw wieloczesciowy ('{title_text}'), ale produkt "
-                     f"jest w kategorii '{category_tree.path_de(resolved_code)}' (kod {resolved_code}) "
-                     f"zamiast w dedykowanej kategorii zestawow "
-                     f"'{category_tree.path_de(set_sibling)}' (kod {set_sibling})."),
+                    (f"The title indicates a multi-piece set ('{title_text}'), but the product "
+                     f"is in category '{category_tree.path_de(resolved_code)}' (code {resolved_code}) "
+                     f"instead of the dedicated set category "
+                     f"'{category_tree.path_de(set_sibling)}' (code {set_sibling})."),
                     "manual_review"))
                 suggestions = []  # unikamy podwojnego zgloszenia tego samego produktu
             else:
@@ -1386,10 +1386,10 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
                 if best_code != resolved_code and score >= 2 and not current_supported:
                     issues.append(issue(
                         cat_code_field, "CATEGORY_MISMATCH_SUSPECTED",
-                        (f"Tresc produktu ('{title_text}') sugeruje kategorie "
-                         f"'{best_path}' (kod {best_code}), a produkt jest przypisany do "
-                         f"'{category_tree.path_de(resolved_code)}' (kod {resolved_code}). "
-                         f"Sugerowana zmiana wymaga potwierdzenia."),
+                        (f"The product content ('{title_text}') suggests category "
+                         f"'{best_path}' (code {best_code}), but the product is assigned to "
+                         f"'{category_tree.path_de(resolved_code)}' (code {resolved_code}). "
+                         f"The suggested change needs confirmation."),
                         "manual_review"))
 
     # --- kolor producenta: EN -> DE (przed tytulem, zeby uzyc poprawnej wartosci
@@ -1412,20 +1412,20 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if derived and len(found) > 1 and "multicolored" not in found:
             new_row[colors_field] = derived
             issues.append(issue(colors_field, "COLOR_FILLED_FROM_MANUFACTURER",
-                                 f"Uzupelniono puste pole {colors_field} pierwszym kolorem "
-                                 f"producenta '{manufacturer_color}' -> '{derived}' (kolory: "
-                                 f"{', '.join(found)}) - sprawdz, czy to kolor dominujacy.",
+                                 f"Filled empty field {colors_field} with the first manufacturer "
+                                 f"color '{manufacturer_color}' -> '{derived}' (colors: "
+                                 f"{', '.join(found)}) - check that it is the dominant color.",
                                  "manual_review"))
         elif derived:
             new_row[colors_field] = derived
             issues.append(issue(colors_field, "COLOR_FILLED_FROM_MANUFACTURER",
-                                 f"Uzupelniono puste pole {colors_field} na podstawie koloru "
-                                 f"producenta '{manufacturer_color}' -> '{derived}'.",
+                                 f"Filled empty field {colors_field} from the manufacturer "
+                                 f"color '{manufacturer_color}' -> '{derived}'.",
                                  "auto_fixed"))
         else:
             issues.append(issue(colors_field, "COLOR_NOT_DERIVED",
-                                 f"Pole {colors_field} jest puste; nie rozpoznano koloru w kolorze "
-                                 f"producenta '{manufacturer_color}' - do recznego uzupelnienia.",
+                                 f"Field {colors_field} is empty; no color recognized in the manufacturer "
+                                 f"color '{manufacturer_color}' - fill it in manually.",
                                  "manual_review"))
 
     # --- kolor producenta: usuniecie wspolnego prefiksu grupy wariantow
@@ -1437,8 +1437,8 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         new_row[color_field] = motif
         prefix_word = _COLOR_PREFIX_SEPARATOR_RE.sub("", color_prefix).strip()
         issues.append(issue(color_field, "COLOR_PREFIX_REMOVED",
-                             f"Usunieto wspolny prefiks '{prefix_word}' z koloru producenta: "
-                             f"'{old_val}' -> '{motif}' (motyw rozroznia warianty).",
+                             f"Removed the common prefix '{prefix_word}' from the manufacturer color: "
+                             f"'{old_val}' -> '{motif}' (the motif distinguishes the variants).",
                              "auto_fixed"))
 
     # --- tytul: struktura zalezna od grupy kategorii (title_rules.TitleProfile,
@@ -1460,7 +1460,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if ch1 or fixed != text:
             new_row[title_field] = fixed
             issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
-                                 f"Naprawiono formatowanie tytulu: '{text}' -> '{fixed}'.",
+                                 f"Fixed title formatting: '{text}' -> '{fixed}'.",
                                  "auto_fixed"))
     elif title_field and new_row.get(title_field):
         text = str(new_row[title_field])
@@ -1564,22 +1564,22 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             new_row[title_field] = final_title
         if format_changed:
             issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
-                                 f"Naprawiono formatowanie/jezyk tytulu: '{text}' -> '{final_title}'.",
+                                 f"Fixed title formatting/language: '{text}' -> '{final_title}'.",
                                  "auto_fixed"))
         if dims_removed:
-            reason = ("produkt nie jest onesize (wymiary podaje sie w polu rozmiaru)"
+            reason = ("the product is not onesize (dimensions belong in the size field)"
                       if profile.dimensions == "onesize"
-                      else "struktura tytulu tej kategorii nie zawiera wymiarow")
+                      else "the title structure of this category has no dimensions")
             issues.append(issue(title_field, "TITLE_DIMENSIONS_REMOVED",
-                                 f"Usunieto wymiary z tytulu - {reason}: '{text}' -> '{final_title}'.",
+                                 f"Removed dimensions from the title - {reason}: '{text}' -> '{final_title}'.",
                                  "auto_fixed"))
         if dims_out and not dim_parts:
             issues.append(issue(title_field, "TITLE_DIMENSIONS_ADDED",
-                                 f"Dodano wymiary do tytulu na podstawie pol width/height/depth_numeric: '{final_title}'.",
+                                 f"Added dimensions to the title from width/height/depth_numeric: '{final_title}'.",
                                  "auto_fixed"))
         if profile.color is True and " in " not in text4 and " im " not in text4:
             issues.append(issue(title_field, "TITLE_PATTERN_MISSING",
-                                 "Tytul nie zawiera wzorca 'Typ (+Model) in Farbe' - wymaga recznej weryfikacji.",
+                                 "The title does not follow the 'Type (+Model) in Color' pattern - needs manual review.",
                                  "manual_review"))
 
     # --- Long Description: te same poprawki jezykowe (EN->DE slowa koloru/materialu) -
@@ -1590,8 +1590,8 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         if desc_changed:
             new_row[desc_field] = desc_fixed
             issues.append(issue(desc_field, "DESCRIPTION_LANGUAGE_FIXED",
-                                 "Naprawiono jezyk/pisownie w Long Description (angielskie "
-                                 "slowa koloru/materialu, uciete znaki specjalne).",
+                                 "Fixed language/spelling in Long Description (English "
+                                 "color/material words, broken special characters).",
                                  "auto_fixed"))
 
     # --- material: format % + jezyk ----------------------------------------------
@@ -1644,7 +1644,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
                           and color_val.lower() in model_val.lower() and len(color_val) > 2)
         if (size_val and size_val.lower() in model_val.lower()) or color_in_model:
             issues.append(issue(model_field, "MODEL_NAME_POLLUTED",
-                                 f"Pole modelu '{model_val}' zdaje sie zawierac kolor/rozmiar - do recznej weryfikacji.",
+                                 f"Model field '{model_val}' seems to contain a color/size - needs manual review.",
                                  "manual_review"))
 
     # --- brandName: wykrycie formatu (numeryczne ID vs tekst) - tylko raportowanie -
@@ -1653,7 +1653,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         brand_val = str(new_row[brand_field]).strip()
         if brand_val.isdigit() and not D.brand_name_for_id(brand_val):
             issues.append(issue(brand_field, "BRAND_IS_NUMERIC_ID",
-                                 f"Marka podana jako numeryczne ID ({brand_val}) - brak tego kodu na liscie marek (data/brands.csv).",
+                                 f"Brand given as a numeric ID ({brand_val}) - this code is not on the brand list (data/brands.csv).",
                                  "manual_review"))
 
     # --- pola enumeracyjne: sprawdzenie wzgledem znanych tokenow -----------------
@@ -1666,7 +1666,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             unknown = [t for t in tokens if t not in allowed]
             if unknown:
                 issues.append(issue(field_code, "ENUM_UNKNOWN_TOKEN",
-                                     f"Nieznane tokeny {unknown} w polu {field_code} - brak w zaobserwowanym slowniku.",
+                                     f"Unknown tokens {unknown} in field {field_code} - not in the known dictionary.",
                                      "manual_review"))
 
     return new_row, issues

@@ -23,7 +23,7 @@ def validate_product(row: OrderedDict, category_tree: CategoryTree) -> list[dict
             issues.append({
                 "attribute": field_code,
                 "error_code": "REQUIRED_FIELD_MISSING",
-                "message": f"Wymagane pole '{field_code}' jest puste dla kategorii "
+                "message": f"Required field '{field_code}' is empty for category "
                            f"'{path_de or '?'}'.",
                 "severity": "manual_review",
             })
@@ -36,9 +36,9 @@ def validate_product(row: OrderedDict, category_tree: CategoryTree) -> list[dict
             issues.append({
                 "attribute": desc_field or "LongDescription_de",
                 "error_code": "DESCRIPTION_MISSING_EXPECTED_INFO",
-                "message": (f"Opis nie wspomina o zadnym z oczekiwanych aspektow "
-                            f"{expected_terms} typowych dla tej grupy produktow - "
-                            f"do recznej weryfikacji (nie dopisujemy tresci automatycznie)."),
+                "message": (f"The description mentions none of the expected aspects "
+                            f"{expected_terms} typical for this product group - "
+                            f"needs manual review (content is not added automatically)."),
                 "severity": "manual_review",
             })
 
