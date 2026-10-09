@@ -119,7 +119,7 @@ def run_pipeline(products, category_tree, meta=None):
 def main():
     st.title("Automatic product data correction")
     st.caption(
-        "Upload a product data file (XML / CSV / XLSX). The app corrects the data "
+        "Upload a product data file (XML / CSV / XLSX / TXT). The app corrects the data "
         "according to the category guidelines and checks the category assignment "
         "against all_categories.json."
     )
