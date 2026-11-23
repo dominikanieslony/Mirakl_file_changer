@@ -1464,6 +1464,22 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
                                  "auto_fixed"))
     elif title_field and new_row.get(title_field):
         text = str(new_row[title_field])
+        original_text = text
+
+        text = re.sub(r"#\d+", "", text)
+        text = re.sub(r'"\s*-', '"', text)
+        text = re.sub(r'-\s*"', '"', text)
+        mpt = str(new_row.get("manufacturer_product_type_text_de") or "").strip()
+        mpt_removed = False
+        if mpt:
+            if re.search(re.escape(mpt), text, re.IGNORECASE):
+                mpt_removed = True
+            text = re.sub(re.escape(mpt), "", text, flags=re.IGNORECASE)
+        text = text.replace("Stylishe", "")
+        text = re.sub(r'\s*"\s*', " ", text)
+        text = re.sub(r"(?<=\s)-|-(?=\s)", "", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+
         model_name = str(new_row.get("modelName_text", "") or "")
         title_compact = _compact(text)
         if (_compact(model_name) not in title_compact
@@ -1481,6 +1497,8 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             # kolor to motyw wariantu (np. "Flamingo") - pelni role modelu,
             # a modelName_text bywa wtedy ta sama wartoscia albo angielskim
             # odpowiednikiem ("Cat" vs "Katze") - nie wstawiamy go osobno
+            model_name = ""
+        if "#" in model_name or "Stylishe" in model_name:
             model_name = ""
         brand_name = _brand_name_for_text(new_row)
         if model_name.strip() and brand_name.strip():
@@ -1531,14 +1549,14 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         base, _ = _strip_generic_category_segments(base)
         text4, _ = strip_title_junk(base, model_name, brand_name, category_tokens,
                                     keep_gender=profile.keep_gender, keep_mit=profile.keep_mit)
-        use_color = profile.color is True or (
-            profile.color == "keep" and bool(re.search(r"\bi[nm]\s+[A-ZÄÖÜ]", core)))
+        use_color = True
         text4, _ = apply_title_fixes_excluding_model(text4, model_name, use_color, protected_names)
         color_for_model = str(new_row.get(color_field, "") or "") if color_field else ""
         text4, _ = ensure_model_present(text4, model_name, color_for_model)
         # tytul bedacy samym modelem ("Hawk") - typ z manufacturer_product_type_text_de
+        pt_for_type = "" if mpt_removed else str(new_row.get("manufacturer_product_type_text_de") or "")
         text4, _ = ensure_product_type(
-            text4, str(new_row.get("manufacturer_product_type_text_de") or ""), category_tokens,
+            text4, pt_for_type, category_tokens,
             model_name)
 
         if use_color:
@@ -1560,7 +1578,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         format_changed = text4 != core or (bool(dim_parts) and bool(dims_out) and dims_out != dim_parts)
         text4 = tidy_title_separators(text4)
         final_title = f"{text4}{other_parts}{dims_out}"
-        if final_title != text:
+        if final_title != original_text:
             new_row[title_field] = final_title
         if format_changed:
             issues.append(issue(title_field, "TITLE_FORMAT_FIXED",
