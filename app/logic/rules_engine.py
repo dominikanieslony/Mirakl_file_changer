@@ -1467,6 +1467,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         original_text = text
 
         text = re.sub(r"#\d+", "", text)
+        text = re.sub(r"\d+", "", text)
         text = re.sub(r'"\s*-', '"', text)
         text = re.sub(r'-\s*"', '"', text)
         mpt = str(new_row.get("manufacturer_product_type_text_de") or "").strip()
@@ -1481,6 +1482,9 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
         text = re.sub(r"\s{2,}", " ", text).strip()
 
         model_name = str(new_row.get("modelName_text", "") or "")
+        model_name = re.sub(r"#\d+", "", model_name)
+        model_name = re.sub(r"\d+", "", model_name)
+        model_name = re.sub(r"\s{2,}", " ", model_name).strip()
         title_compact = _compact(text)
         if (_compact(model_name) not in title_compact
                 and (model_name.strip() in generic_models or _strip_gender_words(model_name)[1])):
@@ -1498,7 +1502,7 @@ def process_product(row: OrderedDict, category_tree: CategoryTree, color_prefix:
             # a modelName_text bywa wtedy ta sama wartoscia albo angielskim
             # odpowiednikiem ("Cat" vs "Katze") - nie wstawiamy go osobno
             model_name = ""
-        if "#" in model_name or "Stylishe" in model_name:
+        if "#" in model_name or "Stylishe" in model_name or "-" in model_name:
             model_name = ""
         brand_name = _brand_name_for_text(new_row)
         if model_name.strip() and brand_name.strip():
