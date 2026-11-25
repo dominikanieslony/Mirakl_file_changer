@@ -351,6 +351,7 @@ FIELD_ALIASES = {
     "Category": "CATEGORY",
     "Shop SKU": "shop_sku",
     "Product Name": "ShortDescription_de",
+    "product_name": "ShortDescription_de",
     "Brand": "brandName",
     "Long Description": "LongDescription_de",
     "Manufacturer product type": "manufacturer_product_type_text_de",
